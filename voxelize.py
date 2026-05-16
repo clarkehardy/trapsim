@@ -21,14 +21,18 @@ from typing import Sequence
 
 import numpy as np
 
-try:
-    import trimesh
-except ImportError as e:
-    raise SystemExit(
-        "trimesh is required.\n  Install: ~/.venvs/mesh/bin/pip install trimesh"
-    ) from e
-
 from .config import GeometryConfig, load_geometry
+
+
+def _require_trimesh():
+    try:
+        import trimesh
+        return trimesh
+    except ImportError as e:
+        raise SystemExit(
+            "trimesh is required for voxelization.\n"
+            "  Install: ~/.venvs/mesh/bin/pip install trimesh"
+        ) from e
 
 
 def _voxelize_to_nodes(mesh, grid_shape, dx, world_offset, label=""):
@@ -140,6 +144,7 @@ def write_grid_txt(geometry: GeometryConfig, out_path: str) -> None:
 
 def build_electrode_masks(geometry: GeometryConfig, out_dir: str) -> None:
     """Write solver/mask_<id>.raw for each electrode in `geometry`."""
+    trimesh = _require_trimesh()
     NX, NY, NZ = geometry.grid.shape
     dx         = geometry.grid.dx_mm
     world_off  = geometry.grid.world_offset_mm
@@ -171,6 +176,7 @@ def build_epsilon(geometry: GeometryConfig, out_dir: str) -> None:
     epsilon = np.ones(NZc * NYc * NXc, dtype=np.float64)
 
     if geometry.dielectrics:
+        trimesh = _require_trimesh()
         print("\nVoxelizing dielectrics ...")
         for diel in geometry.dielectrics:
             print(f"  Dielectric {diel.name} (ε_r = {diel.epsilon_r}):")
