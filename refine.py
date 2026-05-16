@@ -17,15 +17,37 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
+from importlib.resources import files as _pkg_files
 
 from .config import GeometryConfig, load_geometry
 from .voxelize import voxelize
 
-BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SOLVER_DIR_DEFAULT = os.path.join(BASE, "solver")
+
+def _default_solver_dir() -> str:
+    """Where to put the work dir on first use — CWD-relative."""
+    return os.path.join(os.getcwd(), "solver")
+
+
+def _default_out_dir() -> str:
+    return os.getcwd()
+
+
+def _ensure_solver_source(solver_dir: str) -> None:
+    """Copy bundled laplace.cpp + Makefile into solver_dir if absent.
+
+    Lets the package own the C++ source but lets the user hack it after
+    the first run — we never overwrite an existing file.
+    """
+    os.makedirs(solver_dir, exist_ok=True)
+    src_root = _pkg_files("trapsim") / "_solver"
+    for name in ("laplace.cpp", "Makefile"):
+        dst = os.path.join(solver_dir, name)
+        if not os.path.exists(dst):
+            shutil.copy(str(src_root / name), dst)
 
 
 def _newest_mtime(paths) -> float:
@@ -54,6 +76,7 @@ def masks_stale(geometry: GeometryConfig, solver_dir: str) -> bool:
 
 
 def ensure_compiled(solver_dir: str) -> None:
+    _ensure_solver_source(solver_dir)
     src = os.path.join(solver_dir, "laplace.cpp")
     exe = os.path.join(solver_dir, "laplace")
     if (not os.path.exists(exe) or
@@ -71,13 +94,20 @@ def ensure_compiled(solver_dir: str) -> None:
 
 
 def refine(geometry: GeometryConfig, *,
-           out_dir: str = BASE,
-           solver_dir: str = SOLVER_DIR_DEFAULT,
+           out_dir: str | None = None,
+           solver_dir: str | None = None,
            force_voxelize: bool = False,
            omega: float = 1.99,
            max_iter: int = 3000,
            tol: float = 1e-5) -> None:
-    """Run the full refine pipeline for `geometry`."""
+    """Run the full refine pipeline for `geometry`.
+
+    `out_dir` defaults to CWD; `solver_dir` defaults to `<CWD>/solver`.
+    """
+    if out_dir is None:
+        out_dir = _default_out_dir()
+    if solver_dir is None:
+        solver_dir = _default_solver_dir()
 
     # ── Step 1: voxelize ────────────────────────────────────────────────
     if force_voxelize or masks_stale(geometry, solver_dir):
@@ -136,9 +166,9 @@ def refine(geometry: GeometryConfig, *,
 
 def main():
     ap = argparse.ArgumentParser(description="Refine potential arrays from geometry.yaml.")
-    ap.add_argument("--geometry",       default=os.path.join(BASE, "geometry.yaml"))
-    ap.add_argument("--out-dir",        default=BASE)
-    ap.add_argument("--solver-dir",     default=SOLVER_DIR_DEFAULT)
+    ap.add_argument("--geometry",       default=os.path.join(os.getcwd(), "geometry.yaml"))
+    ap.add_argument("--out-dir",        default=_default_out_dir())
+    ap.add_argument("--solver-dir",     default=_default_solver_dir())
     ap.add_argument("--force-voxelize", action="store_true")
     ap.add_argument("--omega",          type=float, default=1.99)
     ap.add_argument("--max-iter",       type=int,   default=3000)

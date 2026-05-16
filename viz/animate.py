@@ -148,11 +148,11 @@ def resolve_dc_and_rf_amp(schedule: Schedule, fire_times, n_samples=1000,
 
 
 def main():
-    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cwd = os.getcwd()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--geometry",   default=os.path.join(base, "geometry.yaml"))
-    ap.add_argument("--traj",       default=os.path.join(base, "trajectories_1.csv"))
-    ap.add_argument("--schedule",   default=os.path.join(base, "schedule_1.json"))
+    ap.add_argument("--geometry",   default=os.path.join(cwd, "geometry.yaml"))
+    ap.add_argument("--traj",       default=os.path.join(cwd, "trajectories_1.csv"))
+    ap.add_argument("--schedule",   default=os.path.join(cwd, "schedule_1.json"))
     ap.add_argument("--fps",        type=float, default=30.0)
     ap.add_argument("--speed",      type=float, default=None,
                     help="µs of sim time per wall-second (default: 20 s total)")

@@ -51,7 +51,6 @@ def run(geometry_path: str,
         else:
             print("── Refine: voxelize + Laplace solve (forced) ──")
         refine_mod.refine(geo, out_dir=base_dir,
-                          solver_dir=refine_mod.SOLVER_DIR_DEFAULT,
                           force_voxelize=do_refine)
         print()
     else:
@@ -92,11 +91,11 @@ def run(geometry_path: str,
 
 
 def main():
-    base_default = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cwd = os.getcwd()
     ap = argparse.ArgumentParser(description="trapsim full-pipeline runner.")
-    ap.add_argument("--geometry",     default=os.path.join(base_default, "geometry.yaml"))
-    ap.add_argument("--experiment",   default=os.path.join(base_default, "experiment.py"))
-    ap.add_argument("--base-dir",     default=base_default)
+    ap.add_argument("--geometry",     default=os.path.join(cwd, "geometry.yaml"))
+    ap.add_argument("--experiment",   default=os.path.join(cwd, "experiment.py"))
+    ap.add_argument("--base-dir",     default=cwd)
     ap.add_argument("--run",          type=int, default=1)
     ap.add_argument("--workers",      type=int, default=None)
     ap.add_argument("--refine",       action="store_true",

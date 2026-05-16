@@ -37,12 +37,12 @@ def _parse_slice(s: str):
 
 
 def main():
-    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cwd = os.getcwd()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--geometry", default=os.path.join(base, "geometry.yaml"))
-    ap.add_argument("--schedule", default=os.path.join(base, "schedule_1.json"),
+    ap.add_argument("--geometry", default=os.path.join(cwd, "geometry.yaml"))
+    ap.add_argument("--schedule", default=os.path.join(cwd, "schedule_1.json"),
                     help="schedule_N.json; --time is interpreted against this.")
-    ap.add_argument("--pa-dir",   default=base,
+    ap.add_argument("--pa-dir",   default=cwd,
                     help="Directory containing paulTrap.pa* files")
     ap.add_argument("--time",     type=float, default=0.0,
                     help="Time (µs) at which to resolve voltages; default 0.")

@@ -191,10 +191,10 @@ def render_flythrough(plotter, output_path, bbox, *,
 
 
 def main():
-    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cwd = os.getcwd()
     ap = argparse.ArgumentParser(description="trapsim 3D viewer.")
-    ap.add_argument("--geometry",   default=os.path.join(base, "geometry.yaml"))
-    ap.add_argument("--traj",       default=os.path.join(base, "trajectories_1.csv"))
+    ap.add_argument("--geometry",   default=os.path.join(cwd, "geometry.yaml"))
+    ap.add_argument("--traj",       default=os.path.join(cwd, "trajectories_1.csv"))
     ap.add_argument("--screenshot", default=None)
     ap.add_argument("--animation",  default=None,
                     help="Save cinematic flythrough to .mp4 or .gif")
