@@ -45,6 +45,8 @@ class Electrode:
     name: str
     stls: list[str]               # resolved absolute paths
     electrode_id: int             # assigned 1..N in declaration order
+    color: tuple[float, float, float] | None = None    # None → auto-assigned
+    opacity: float = 0.40
 
 
 @dataclass
@@ -52,6 +54,8 @@ class Dielectric:
     name: str
     stl: str                      # resolved absolute path
     epsilon_r: float
+    color: tuple[float, float, float] = (0.50, 0.90, 0.95)
+    opacity: float = 0.30
 
 
 @dataclass
@@ -59,6 +63,7 @@ class Decoration:
     name: str
     stl: str                      # resolved absolute path
     color: tuple[float, float, float] = (0.5, 0.5, 0.5)
+    opacity: float = 0.30
 
 
 @dataclass
@@ -145,7 +150,10 @@ def load_geometry(path: str) -> GeometryConfig:
         stls = [_resolve_stl(s, base_dir) for s in e["stls"]]
         if not stls:
             raise ValueError(f"{path}: electrode {name!r} has empty 'stls'")
-        electrodes.append(Electrode(name=name, stls=stls, electrode_id=i))
+        color = tuple(e["color"]) if "color" in e else None
+        electrodes.append(Electrode(
+            name=name, stls=stls, electrode_id=i,
+            color=color, opacity=float(e.get("opacity", 0.40))))
 
     # Dielectrics (optional)
     dielectrics = []
@@ -153,10 +161,13 @@ def load_geometry(path: str) -> GeometryConfig:
         if "name" not in d or "stl" not in d or "epsilon_r" not in d:
             raise ValueError(
                 f"{path}: dielectric #{i} must have 'name', 'stl', 'epsilon_r'")
+        color = tuple(d.get("color", (0.50, 0.90, 0.95)))
         dielectrics.append(Dielectric(
             name=str(d["name"]),
             stl=_resolve_stl(d["stl"], base_dir),
             epsilon_r=float(d["epsilon_r"]),
+            color=color,
+            opacity=float(d.get("opacity", 0.30)),
         ))
 
     # Decoration (optional)
@@ -170,6 +181,7 @@ def load_geometry(path: str) -> GeometryConfig:
             name=str(dec["name"]),
             stl=_resolve_stl(dec["stl"], base_dir),
             color=color,
+            opacity=float(dec.get("opacity", 0.30)),
         ))
 
     return GeometryConfig(
