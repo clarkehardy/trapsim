@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name            = "trapsim"
+version         = "0.1.0"
+description     = "Geometry-agnostic particle integrator for electrode trap simulations"
+readme          = "README.md"
+requires-python = ">=3.10"
+license         = {text = "MIT"}
+authors         = [{name = "Clarke Hardy", email = "clarke.hardy@yale.edu"}]
+keywords        = ["paul-trap", "ion-trap", "simulation", "laplace", "nanosphere"]
+classifiers     = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+refine = ["trimesh>=4.0"]                       # for trapsim.voxelize
+viz    = ["matplotlib>=3.7", "pyvista>=0.43"]   # for trapsim.viz.*
+all    = ["trimesh>=4.0", "matplotlib>=3.7", "pyvista>=0.43"]
+dev    = ["pytest>=8", "pytest-cov"]
+
+[project.scripts]
+trapsim = "trapsim.run:main"
+# `python -m trapsim.{refine,fly,viz.animate,viz.visualize,viz.plot_field}` also work.
+
+[project.urls]
+Source = "https://github.com/clarkehardy/trapsim"
+Issues = "https://github.com/clarkehardy/trapsim/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+trapsim = ["_solver/laplace.cpp", "_solver/Makefile"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
