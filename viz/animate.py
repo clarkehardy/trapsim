@@ -34,30 +34,35 @@ from ..schedule import Schedule
 from ._common import bbox_union, load_trajectories, read_stl_bbox
 
 
-def compute_electrode_bboxes(geo):
-    """Per-electrode (xlo,xhi,ylo,yhi,zlo,zhi) from STL bboxes (union over STLs)."""
+def compute_body_bboxes(geo):
+    """One bbox per STL body (rather than per electrode).  Keeps individual
+    rods drawn separately so the gap between sets is visible even though
+    they share a voltage source.  Returns a list of
+    (label, color, xlo, xhi, ylo, yhi, zlo, zhi) tuples."""
     out = []
     for e in geo.electrodes:
-        boxes = [read_stl_bbox(s) for s in e.stls]
-        u = bbox_union(*boxes)
-        if u is None:
-            continue
-        (xlo, xhi), (ylo, yhi), (zlo, zhi) = u
-        out.append((e.name, e.color, xlo, xhi, ylo, yhi, zlo, zhi))
+        for stl in e.stls:
+            bb = read_stl_bbox(stl)
+            if bb is None:
+                continue
+            (xlo, xhi), (ylo, yhi), (zlo, zhi) = bb
+            out.append((e.name, e.color, xlo, xhi, ylo, yhi, zlo, zhi))
     return out
 
 
-def draw_geometry(ax, electrode_bboxes, view, view_lims):
-    """view = "side" (Y vs Z) or "top" (X vs Z)."""
-    for name, color, xlo, xhi, ylo, yhi, zlo, zhi in electrode_bboxes:
+def draw_geometry(ax, body_bboxes, view, view_lims):
+    """view = "side" (Y vs Z) or "top" (X vs Z).  One filled rectangle per
+    STL body so gaps between physically separate rods on the same electrode
+    are visible.  Outlined to make adjacent rods distinguishable."""
+    for name, color, xlo, xhi, ylo, yhi, zlo, zhi in body_bboxes:
         if view == "side":
             v0, v1 = ylo, yhi
         else:
             v0, v1 = xlo, xhi
+        face = color if color else (0.6, 0.6, 0.6)
         rect = mpatches.Rectangle(
             (zlo, v0), zhi - zlo, v1 - v0,
-            facecolor=color if color else (0.6, 0.6, 0.6),
-            edgecolor="none", alpha=0.35, zorder=1)
+            facecolor=face, edgecolor=face, alpha=0.35, lw=0.8, zorder=1)
         ax.add_patch(rect)
     if view_lims:
         ax.set_xlim(view_lims["z"])
@@ -84,34 +89,62 @@ def compute_fire_times(ions, triggers):
     return out
 
 
-def resolve_voltage_timeline(schedule: Schedule, fire_times, n_samples=1000,
-                             t_max=None):
-    """Sample schedule.evaluate at uniformly-spaced absolute times.
+def resolve_dc_and_rf_amp(schedule: Schedule, fire_times, n_samples=1000,
+                          t_max=None):
+    """Sample the schedule on a uniform time axis, separating DC from RF
+    amplitude (so the high-frequency cosine carrier doesn't fill the
+    voltage panel band-to-band).
 
-    `fire_times` is a list aligned with schedule._triggers giving the
-    absolute fire time for each trigger (or None).  Returns
-    (time_axis, dict {electrode_name: voltage array}).
+    Returns (t_axis, dc_dict, rf_amp_dict) where dc_dict and rf_amp_dict
+    each map electrode_name → ndarray of shape (n_samples,).  An electrode
+    appears in rf_amp_dict only if at least one source (main or trigger)
+    defines an RF entry for it.
     """
-    # Build trigger_state keyed by name
-    trigger_state = {}
-    for trig, t_fire in zip(schedule._triggers, fire_times):
-        trigger_state[trig["name"]] = t_fire
-    main_t = schedule._main["time_us"]
+    main_t = np.asarray(schedule._main["time_us"], dtype=float)
     if t_max is None:
         t_max = float(main_t[-1]) if len(main_t) else 0.0
-    t_axis = np.linspace(0, t_max, n_samples)
+    t_axis = np.linspace(0.0, t_max, n_samples)
 
-    # Per-electrode voltages over time, evaluating with the *eventual* trigger
-    # state after each fire time.  Before a trigger's fire time, that trigger
-    # contributes nothing (state = None).
-    voltages = {name: np.zeros(n_samples) for name in schedule._electrode_names}
+    elec_names = schedule._electrode_names
+    dc_out = {n: np.zeros(n_samples) for n in elec_names}
+    rf_out = {}
+
+    fire_by_name = {t["name"]: tf for t, tf in zip(schedule._triggers, fire_times)}
+
+    # Walk the same source-resolution logic as Schedule.evaluate, but emit
+    # DC and RF-amplitude separately (skipping the cos carrier).
+    from ..schedule import _interp
     for i, t in enumerate(t_axis):
-        ts = {name: (tf if (tf is not None and t >= tf) else None)
-              for name, tf in trigger_state.items()}
-        v = schedule.evaluate(float(t), ts)
-        for name, val in v.items():
-            voltages[name][i] = val
-    return t_axis, voltages
+        ts = {n: (tf if (tf is not None and t >= tf) else None)
+              for n, tf in fire_by_name.items()}
+
+        dc_source = {n: (schedule._main["time_us"], arr, 0.0)
+                     for n, arr in schedule._main["dc"].items()}
+        rf_source = {n: (schedule._main["time_us"], rf, 0.0)
+                     for n, rf in schedule._main["rf"].items()}
+        fired = sorted(
+            [(trig["name"], ts[trig["name"]], trig)
+             for trig in schedule._triggers if ts[trig["name"]] is not None],
+            key=lambda x: x[1])
+        for _, t_fire, trig in fired:
+            ts_sched = trig["schedule"]
+            for n, arr in ts_sched["dc"].items():
+                dc_source[n] = (ts_sched["time_us"], arr, t_fire)
+            for n, rf in ts_sched["rf"].items():
+                rf_source[n] = (ts_sched["time_us"], rf, t_fire)
+
+        for n in elec_names:
+            if n in dc_source:
+                tt, arr, off = dc_source[n]
+                dc_out[n][i] = _interp(tt, arr, t - off)
+            if n in rf_source:
+                tt, rf, off = rf_source[n]
+                amp = _interp(tt, rf["amplitude"], t - off)
+                if n not in rf_out:
+                    rf_out[n] = np.zeros(n_samples)
+                rf_out[n][i] = amp
+
+    return t_axis, dc_out, rf_out
 
 
 def main():
@@ -149,8 +182,9 @@ def main():
 
     fire_times = compute_fire_times(ions, trigger_data or [])
 
-    # Electrode rectangles for the 2D plots
-    elec_bboxes = compute_electrode_bboxes(geo)
+    # One rectangle per STL body so the gap between physically separate rods
+    # on the same electrode is visible.
+    body_bboxes = compute_body_bboxes(geo)
 
     # View limits from the union bounding box
     global_bb = bbox_union(*[read_stl_bbox(s) for e in geo.electrodes
@@ -183,8 +217,8 @@ def main():
                                             gridspec_kw={"hspace": 0.40})
         ax_bot = None
 
-    draw_geometry(ax_xz, elec_bboxes, view="top",  view_lims=view_lims)
-    draw_geometry(ax_yz, elec_bboxes, view="side", view_lims=view_lims)
+    draw_geometry(ax_xz, body_bboxes, view="top",  view_lims=view_lims)
+    draw_geometry(ax_yz, body_bboxes, view="side", view_lims=view_lims)
 
     # Trigger overlays
     _TRIG_PALETTE = ["darkorchid", "tomato", "mediumseagreen", "saddlebrown"]
@@ -223,21 +257,23 @@ def main():
     # ── Voltage panel ────────────────────────────────────────────────
     vcursor = None
     if have_sched and ax_bot is not None:
-        t_axis, voltages = resolve_voltage_timeline(
+        t_axis, dc_v, rf_amp = resolve_dc_and_rf_amp(
             sched, fire_times, n_samples=args.samples, t_max=t_max)
-        # Plot each electrode in its YAML color (or auto if unset)
+        # Solid lines: DC.  Dashed: RF amplitude envelope (no carrier shown).
         for e in geo.electrodes:
-            v = voltages.get(e.name, None)
-            if v is None or np.allclose(v, v[0]):
-                # constant traces just look like a horizontal line — still plot for completeness
-                pass
             color = e.color if e.color else None
-            ax_bot.plot(t_axis, voltages[e.name], lw=1.0,
-                        color=color, label=e.name)
+            if e.name in dc_v:
+                ax_bot.plot(t_axis, dc_v[e.name], lw=1.0, ls="-",
+                            color=color, label=f"{e.name} (DC)")
+        for e in geo.electrodes:
+            color = e.color if e.color else None
+            if e.name in rf_amp:
+                ax_bot.plot(t_axis, rf_amp[e.name], lw=1.0, ls="--",
+                            color=color, label=f"{e.name} (RF amp)")
         ax_bot.set_xlim(t_axis[0], t_axis[-1])
         ax_bot.set_xlabel("Time (µs)")
         ax_bot.set_ylabel("Voltage (V)")
-        ax_bot.set_title("Resolved electrode voltages (DC + RF carrier)")
+        ax_bot.set_title("Electrode voltages — solid = DC, dashed = RF amplitude")
         ax_bot.grid(True, alpha=0.3)
         ax_bot.legend(loc="upper right", fontsize=7, ncol=3, framealpha=0.85)
         # Trigger fire-time markers
