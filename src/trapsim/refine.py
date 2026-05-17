@@ -9,16 +9,16 @@ Usage:
 
 Steps:
   1. Voxelize STLs if mask files are stale (or --force-voxelize).
-  2. Compile <solver_dir>/laplace if absent or older than laplace.cpp.
-  3. Run the C++ solver once per electrode → <out_dir>/<name>.pa<id>,
-     where `<name>` is the geometry name (defaults to the YAML file stem).
+  2. Compile <solver_dir>/laplace from the bundled C++ source.  If
+     <solver_dir>/laplace.cpp exists locally, prefer that (lets you hack
+     the SOR loop without forking the package).
+  3. Run the solver once per electrode → <out_dir>/field.pa<id>.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -28,27 +28,26 @@ from .config import GeometryConfig, load_geometry
 from .voxelize import voxelize
 
 
-def _default_solver_dir(name: str) -> str:
-    """Per-geometry work dir holding source, binary, mask/epsilon/grid files."""
-    return os.path.join(os.getcwd(), f"solver_{name}")
+def _default_solver_dir() -> str:
+    """Work dir for masks, epsilon, grid, and the compiled binary."""
+    return os.path.join(os.getcwd(), "solver")
 
 
 def _default_out_dir() -> str:
     return os.getcwd()
 
 
-def _ensure_solver_source(solver_dir: str) -> None:
-    """Copy bundled laplace.cpp + Makefile into solver_dir if absent.
+def _solver_source(solver_dir: str) -> str:
+    """Return the laplace.cpp path to compile.
 
-    Lets the package own the C++ source but lets the user hack it after
-    the first run — we never overwrite an existing file.
+    Prefer a local copy at <solver_dir>/laplace.cpp (for users who want to
+    hack the solver); otherwise compile directly from the package source
+    in site-packages.
     """
-    os.makedirs(solver_dir, exist_ok=True)
-    src_root = _pkg_files("trapsim") / "_solver"
-    for name in ("laplace.cpp", "Makefile"):
-        dst = os.path.join(solver_dir, name)
-        if not os.path.exists(dst):
-            shutil.copy(str(src_root / name), dst)
+    local = os.path.join(solver_dir, "laplace.cpp")
+    if os.path.exists(local):
+        return local
+    return str(_pkg_files("trapsim") / "_solver" / "laplace.cpp")
 
 
 def _newest_mtime(paths) -> float:
@@ -77,21 +76,25 @@ def masks_stale(geometry: GeometryConfig, solver_dir: str) -> bool:
 
 
 def ensure_compiled(solver_dir: str) -> None:
-    _ensure_solver_source(solver_dir)
-    src = os.path.join(solver_dir, "laplace.cpp")
+    """Build <solver_dir>/laplace from the bundled (or local) C++ source."""
+    os.makedirs(solver_dir, exist_ok=True)
+    src = _solver_source(solver_dir)
     exe = os.path.join(solver_dir, "laplace")
-    if (not os.path.exists(exe) or
-            os.path.getmtime(exe) < os.path.getmtime(src)):
-        print("Compiling solver/laplace ...")
-        result = subprocess.run(["make", "-C", solver_dir],
-                                capture_output=True, text=True)
-        if result.returncode != 0:
-            print(result.stdout)
-            print(result.stderr)
-            sys.exit(f"ERROR: compile failed (rc={result.returncode})")
-        print("  Compiled OK.")
-    else:
-        print("solver/laplace is up-to-date.")
+    if os.path.exists(exe) and os.path.getmtime(exe) >= os.path.getmtime(src):
+        print(f"{exe} is up-to-date.")
+        return
+
+    cxx      = os.environ.get("CXX", "clang++")
+    cxxflags = os.environ.get("CXXFLAGS", "-O3 -std=c++17 -Wall -Wextra").split()
+    ldflags  = os.environ.get("LDFLAGS", "").split()
+    print(f"Compiling solver from {src} ...")
+    cmd = [cxx, *cxxflags, "-o", exe, src, *ldflags]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        sys.exit(f"ERROR: compile failed (rc={result.returncode})")
+    print("  Compiled OK.")
 
 
 def refine(geometry: GeometryConfig, *,
@@ -103,12 +106,12 @@ def refine(geometry: GeometryConfig, *,
            tol: float = 1e-5) -> None:
     """Run the full refine pipeline for `geometry`.
 
-    `out_dir` defaults to CWD; `solver_dir` defaults to `<CWD>/solver_<name>`.
+    `out_dir` defaults to CWD; `solver_dir` defaults to `<CWD>/solver`.
     """
     if out_dir is None:
         out_dir = _default_out_dir()
     if solver_dir is None:
-        solver_dir = _default_solver_dir(geometry.name)
+        solver_dir = _default_solver_dir()
 
     # ── Step 1: voxelize ────────────────────────────────────────────────
     if force_voxelize or masks_stale(geometry, solver_dir):
@@ -136,7 +139,7 @@ def refine(geometry: GeometryConfig, *,
         if not os.path.exists(f):
             sys.exit(f"ERROR: required file not found: {f}")
 
-    cmd = [exe, grid_file, eps_file, out_dir, geometry.name,
+    cmd = [exe, grid_file, eps_file, out_dir,
            str(omega), str(max_iter), str(tol)] + mask_args
     t0 = time.time()
     result = subprocess.run(cmd)
@@ -149,7 +152,7 @@ def refine(geometry: GeometryConfig, *,
     expected = 56 + NX * NY * NZ * 8
     all_ok = True
     for elec in geometry.electrodes:
-        pa = os.path.join(out_dir, f"{geometry.name}.pa{elec.electrode_id}")
+        pa = os.path.join(out_dir, f"field.pa{elec.electrode_id}")
         if not os.path.exists(pa):
             print(f"  WARNING: {pa} not found")
             all_ok = False
@@ -169,9 +172,9 @@ def main():
     ap = argparse.ArgumentParser(description="Refine potential arrays from geometry.yaml.")
     ap.add_argument("--geometry",       default=os.path.join(os.getcwd(), "geometry.yaml"))
     ap.add_argument("--out-dir",        default=_default_out_dir())
-    ap.add_argument("--solver-dir",     default=None,
-                    help="Work dir for source+binary+mask/epsilon/grid "
-                         "(default: ./solver_<geometry.name>/).")
+    ap.add_argument("--solver-dir",     default=_default_solver_dir(),
+                    help="Work dir for the binary, masks, epsilon, grid "
+                         "(default: ./solver/).")
     ap.add_argument("--force-voxelize", action="store_true")
     ap.add_argument("--omega",          type=float, default=1.99)
     ap.add_argument("--max-iter",       type=int,   default=3000)

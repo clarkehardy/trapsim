@@ -29,13 +29,25 @@ Extras:
 | `[all]` | both of the above | usually fine to install upfront |
 | `[dev]` | `pytest`, `pytest-cov` | running the test suite |
 
-The C++ Laplace solver compiles on first `trapsim.refine` call via `make` (needs Xcode CLT on macOS or `build-essential` on Linux). The package ships `_solver/laplace.cpp` + `Makefile`; they get copied into your working directory's `solver/` on first use and are never overwritten thereafter, so you can hack the SOR loop without forking the package.
+The C++ Laplace solver compiles on first `trapsim.refine` call directly from the bundled package source (needs Xcode CLT on macOS or `build-essential` on Linux). The binary is written to `<CWD>/solver/laplace`. To hack the SOR loop without forking the package, copy `laplace.cpp` from `site-packages/trapsim/_solver/` into your project's `solver/` folder — the build picks up a local source preferentially. Override the build via `CXX`, `CXXFLAGS`, `LDFLAGS` env vars.
 
 ---
 
 ## Quickstart
 
-Create three files: `geometry.yaml` (electrodes and dielectrics), `experiment.py` (particles, voltage schedule, triggers, physics), and a thin `run.py` shim:
+The recommended layout is **one folder per simulation**. Each simulation directory holds its own `geometry.yaml` (electrodes and dielectrics), `experiment.py` (particles, schedule, triggers, physics), STL files, and a thin `run.py` shim:
+
+```
+~/sims/paul_trap/
+  geometry.yaml
+  experiment.py
+  run.py
+  stl/
+    plate_top.stl
+    plate_bottom.stl
+```
+
+The `run.py` shim is three lines:
 
 ```python
 # run.py
@@ -44,13 +56,15 @@ if __name__ == "__main__":
     main()
 ```
 
-Then:
+Then from inside the simulation folder:
 
 ```
 python run.py                 # refine if needed → fly → animate → visualize
-python run.py --run 2         # writes <name>_trajectories_2.csv, <name>_schedule_2.json
+python run.py --run 2         # writes trajectories_2.csv, schedule_2.json
 python run.py --no-animate --no-visualize
 ```
+
+All output (`field.pa*`, `trajectories_<N>.csv`, `schedule_<N>.json`, `solver/`) is written into the simulation folder, so you can have as many independent simulations as you want without collisions — they don't share anything.
 
 Minimal `geometry.yaml`:
 
@@ -96,8 +110,6 @@ triggers = []
 ## `geometry.yaml` schema
 
 ```yaml
-name: paul_trap                      # optional; default = YAML file stem.
-                                     # Drives output file names — see below.
 grid:
   dx_mm: 0.5
   bounds_mm:
@@ -124,16 +136,14 @@ decoration:                          # drawn by visualize.py, no field contribut
 
 Each electrode is assigned an integer `electrode_id` (1, 2, …) in declaration order. STL paths are resolved against the YAML's directory, then the repo root, then `stl/` — so `rod.stl` and `stl/rod.stl` both work.
 
-The geometry **`name`** (default: YAML file stem, restricted to `[A-Za-z0-9_-]+`) is the prefix for every per-geometry output:
+Output files (all written into the simulation folder):
 
 | File | Path |
 |------|------|
-| Potential array (per electrode) | `<name>.pa<electrode_id>` |
-| Trajectories (per run) | `<name>_trajectories_<run>.csv` |
-| Schedule snapshot (per run) | `<name>_schedule_<run>.json` |
-| Solver work dir (masks, ε, grid, binary) | `solver_<name>/` |
-
-This means two geometries (`paul_trap.yaml`, `linear_trap.yaml`) can coexist in the same working directory without colliding.
+| Potential array (per electrode) | `field.pa<electrode_id>` |
+| Trajectories (per run) | `trajectories_<run>.csv` |
+| Schedule snapshot (per run) | `schedule_<run>.json` |
+| Solver work dir (masks, ε, grid, binary) | `solver/` |
 
 ---
 
@@ -236,16 +246,16 @@ All commands default to `./geometry.yaml`, `./experiment.py`, and write PA / tra
 
 ## Output file formats
 
-### `<name>.pa<electrode_id>` — SIMION potential array (binary)
+### `field.pa<electrode_id>` — SIMION potential array (binary)
 
 56-byte header (flags, scale_ref, NX, NY, NZ, dx) followed by `NX·NY·NZ` float64 in `[k][j][i]` order. Electrode-surface voxels are encoded with sign-bit or `>1.5·scale_ref`. Free-space voxels store φ/scale_ref where φ is the unit-drive potential. Read via:
 
 ```python
 from trapsim.io.pa import read_pa
-phi, NX, NY, NZ, dx = read_pa("paul_trap.pa1")
+phi, NX, NY, NZ, dx = read_pa("field.pa1")
 ```
 
-### `<name>_trajectories_<N>.csv`
+### `trajectories_<N>.csv`
 
 ```
 ion_id,t_us,x_mm,y_mm,z_mm
@@ -256,7 +266,7 @@ ion_id,t_us,x_mm,y_mm,z_mm
 
 Coordinates are in Fusion-world mm. Recorded every `record_stride` accepted integrator steps, plus start and end.
 
-### `<name>_schedule_<N>.json`
+### `schedule_<N>.json`
 
 ```json
 {
@@ -292,7 +302,6 @@ src/trapsim/
   viz/                   animate, visualize, plot_field
   _solver/               bundled C++ source (package data)
     laplace.cpp
-    Makefile
 tests/                   pytest unit tests
 pyproject.toml
 ```

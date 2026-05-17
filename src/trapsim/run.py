@@ -1,13 +1,14 @@
 """trapsim.run  –  Top-level pipeline orchestrator.
 
     python -m trapsim.run                  # refine if needed, fly, animate, visualize
-    python -m trapsim.run --run 2          # output → <name>_trajectories_2.csv etc.
+    python -m trapsim.run --run 2          # output → trajectories_2.csv, schedule_2.json
     python -m trapsim.run --no-animate
     python -m trapsim.run --refine         # force a full refine before flying
-    python -m trapsim.run --no-fly         # re-use existing <name>_trajectories_N.csv
+    python -m trapsim.run --no-fly         # re-use existing trajectories_N.csv
 
 The same flags are accepted by trapsim.run.run() if called as a function.
-All output files are prefixed by the geometry name (default = YAML file stem).
+The expected layout is one folder per simulation (geometry.yaml +
+experiment.py + run.py in CWD); all output files are written into CWD.
 """
 
 from __future__ import annotations
@@ -39,8 +40,8 @@ def run(geometry_path: str,
     geo = load_geometry(geometry_path)
     exp = load_experiment(experiment_path, geo)
 
-    traj_path  = os.path.join(base_dir, f"{geo.name}_trajectories_{run_number}.csv")
-    sched_path = os.path.join(base_dir, f"{geo.name}_schedule_{run_number}.json")
+    traj_path  = os.path.join(base_dir, f"trajectories_{run_number}.csv")
+    sched_path = os.path.join(base_dir, f"schedule_{run_number}.json")
 
     # ── Refine ───────────────────────────────────────────────────────────
     # Auto-refine only when a PA file is missing.  STL-mtime-based staleness
@@ -48,7 +49,7 @@ def run(geometry_path: str,
     # geometry) — the user should pass --refine explicitly after editing STLs.
     pa_missing = [e.electrode_id for e in geo.electrodes
                   if not os.path.exists(os.path.join(
-                      base_dir, f"{geo.name}.pa{e.electrode_id}"))]
+                      base_dir, f"field.pa{e.electrode_id}"))]
     if do_refine or pa_missing:
         if pa_missing and not do_refine:
             print(f"── Refine: missing PA files for electrodes {pa_missing} ──")

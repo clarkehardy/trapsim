@@ -6,14 +6,13 @@
  * and writes SIMION-compatible PA binary files.
  *
  * Usage:
- *   ./laplace <grid.txt> <epsilon.raw> <out_dir> <name> <omega> <max_iter> <tol> \
+ *   ./laplace <grid.txt> <epsilon.raw> <out_dir> <omega> <max_iter> <tol> \
  *             <mask_1.raw> [<mask_2.raw> ...]
  *
  *   grid.txt   : one line "NX NY NZ DX TX TY TZ"
  *   epsilon.raw: flat float64 array, shape (NZ-1)×(NY-1)×(NX-1), row-major
  *   mask_e.raw : flat uint8 array, shape NZ×NY×NX; 1 = inside electrode e
- *   out_dir    : directory to write <name>.pa1 ... <name>.paN
- *   name       : output filename prefix (e.g. "paul_trap")
+ *   out_dir    : directory to write field.pa1 ... field.paN
  *   omega      : SOR relaxation parameter (typically 1.90–1.99)
  *   max_iter   : maximum iterations per electrode
  *   tol        : convergence tolerance (max |Δφ| per sweep)
@@ -244,9 +243,9 @@ static void write_pa(
 
 // ── main ──────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
-    if (argc < 9) {
+    if (argc < 8) {
         std::cerr <<
-            "Usage: laplace <grid.txt> <epsilon.raw> <out_dir> <name> <omega> <max_iter> <tol>"
+            "Usage: laplace <grid.txt> <epsilon.raw> <out_dir> <omega> <max_iter> <tol>"
             " <mask_1.raw> [<mask_2.raw> ...]\n";
         return 1;
     }
@@ -255,13 +254,12 @@ int main(int argc, char* argv[]) {
     const std::string grid_file  = argv[1];
     const std::string eps_file   = argv[2];
     const std::string out_dir    = argv[3];
-    const std::string name       = argv[4];
-    const double      omega      = std::stod(argv[5]);
-    const int         max_iter   = std::stoi(argv[6]);
-    const double      tol        = std::stod(argv[7]);
-    const int         N_ELEC     = argc - 8;
+    const double      omega      = std::stod(argv[4]);
+    const int         max_iter   = std::stoi(argv[5]);
+    const double      tol        = std::stod(argv[6]);
+    const int         N_ELEC     = argc - 7;
     std::vector<std::string> mask_files(N_ELEC);
-    for (int e = 0; e < N_ELEC; e++) mask_files[e] = argv[8 + e];
+    for (int e = 0; e < N_ELEC; e++) mask_files[e] = argv[7 + e];
 
     // Read grid parameters
     {
@@ -324,9 +322,9 @@ int main(int argc, char* argv[]) {
         auto t1 = std::chrono::steady_clock::now();
         double secs = std::chrono::duration<double>(t1 - t0).count();
 
-        // Build output path: <out_dir>/<name>.pa<e>
+        // Build output path: <out_dir>/field.pa<e>
         std::ostringstream oss;
-        oss << out_dir << "/" << name << ".pa" << e;
+        oss << out_dir << "/field.pa" << e;
         write_pa(oss.str(), phi, elec_mask, e);
 
         std::cout << "  pa" << e << ": " << iters << " iters  "

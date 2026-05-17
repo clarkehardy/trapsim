@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -89,9 +88,6 @@ class Grid:
         return tuple(out)
 
 
-_NAME_OK = re.compile(r"^[A-Za-z0-9_\-]+$")
-
-
 @dataclass
 class GeometryConfig:
     grid: Grid
@@ -99,7 +95,6 @@ class GeometryConfig:
     dielectrics: list[Dielectric] = field(default_factory=list)
     decoration: list[Decoration] = field(default_factory=list)
     source_path: str = ""
-    name: str = ""                # prefix for output files (PA, trajectories, etc.)
 
     @property
     def n_electrodes(self) -> int:
@@ -122,14 +117,6 @@ def load_geometry(path: str) -> GeometryConfig:
 
     with open(path) as f:
         raw = yaml.safe_load(f)
-
-    # Name — drives output file prefix (PA files, trajectories, schedule, work dir).
-    # Default = stem of the YAML filename so `geometry.yaml` → "geometry".
-    geo_name = str(raw.get("name") or os.path.splitext(os.path.basename(path))[0])
-    if not _NAME_OK.match(geo_name):
-        raise ValueError(
-            f"{path}: name {geo_name!r} must match [A-Za-z0-9_-]+ "
-            f"(used as a filename prefix)")
 
     # Grid
     if "grid" not in raw:
@@ -203,7 +190,6 @@ def load_geometry(path: str) -> GeometryConfig:
         dielectrics=dielectrics,
         decoration=decoration,
         source_path=path,
-        name=geo_name,
     )
 
 

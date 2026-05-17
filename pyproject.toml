@@ -44,7 +44,7 @@ Issues = "https://github.com/clarkehardy/trapsim/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-trapsim = ["_solver/laplace.cpp", "_solver/Makefile"]
+trapsim = ["_solver/laplace.cpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

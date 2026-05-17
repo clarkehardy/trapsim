@@ -40,11 +40,10 @@ def main():
     cwd = os.getcwd()
     ap = argparse.ArgumentParser()
     ap.add_argument("--geometry", default=os.path.join(cwd, "geometry.yaml"))
-    ap.add_argument("--schedule", default=None,
-                    help="default: <cwd>/<geometry.name>_schedule_1.json. "
-                         "--time is interpreted against this.")
+    ap.add_argument("--schedule", default=os.path.join(cwd, "schedule_1.json"),
+                    help="schedule_N.json; --time is interpreted against this.")
     ap.add_argument("--pa-dir",   default=cwd,
-                    help="Directory containing <name>.pa* files")
+                    help="Directory containing field.pa* files")
     ap.add_argument("--time",     type=float, default=0.0,
                     help="Time (µs) at which to resolve voltages; default 0.")
     ap.add_argument("--slice",    default="y=19",
@@ -56,7 +55,6 @@ def main():
     args = ap.parse_args()
 
     geo = load_geometry(args.geometry)
-    sched_path = args.schedule or os.path.join(cwd, f"{geo.name}_schedule_1.json")
     print(f"Loading PA files for {geo.n_electrodes} electrodes …")
     phi_stack, grid = load_phi_stack(geo, args.pa_dir, verbose=False)
     NX, NY, NZ = grid["NX"], grid["NY"], grid["NZ"]
@@ -64,15 +62,15 @@ def main():
     wox, woy, woz = geo.grid.world_offset_mm
 
     # Resolve voltages
-    if os.path.exists(sched_path):
-        snap = read_schedule_snapshot(sched_path)
+    if os.path.exists(args.schedule):
+        snap = read_schedule_snapshot(args.schedule)
         sched = Schedule(snap["main"], snap["triggers"], geo.electrode_names())
         ts = {t["name"]: None for t in snap["triggers"]}
         # If --time is past a trigger's threshold-time, we don't know the
         # fire time without a trajectory.  Use the main schedule only.
         voltages = sched.evaluate(args.time, ts)
     else:
-        print(f"  [warn] {sched_path} not found; using 1 V per electrode.")
+        print(f"  [warn] {args.schedule} not found; using 1 V per electrode.")
         voltages = {e.name: 1.0 for e in geo.electrodes}
 
     # Build total potential

@@ -194,8 +194,7 @@ def main():
     cwd = os.getcwd()
     ap = argparse.ArgumentParser(description="trapsim 3D viewer.")
     ap.add_argument("--geometry",   default=os.path.join(cwd, "geometry.yaml"))
-    ap.add_argument("--traj",       default=None,
-                    help="default: <cwd>/<geometry.name>_trajectories_1.csv")
+    ap.add_argument("--traj",       default=os.path.join(cwd, "trajectories_1.csv"))
     ap.add_argument("--screenshot", default=None)
     ap.add_argument("--animation",  default=None,
                     help="Save cinematic flythrough to .mp4 or .gif")
@@ -211,7 +210,6 @@ def main():
     args = ap.parse_args()
 
     geo = load_geometry(args.geometry)
-    traj_path = args.traj or os.path.join(cwd, f"{geo.name}_trajectories_1.csv")
     off_screen = bool(args.screenshot) or bool(args.animation)
     plotter = pv.Plotter(off_screen=off_screen, title="trapsim — 3D view")
     plotter.set_background("white")
@@ -224,8 +222,8 @@ def main():
     print(f"Loading geometry from {args.geometry} …")
     add_geometry(plotter, geo, show_labels=not bool(args.animation))
 
-    print(f"Loading trajectories from {traj_path} …")
-    ions = load_trajectories(traj_path)
+    print(f"Loading trajectories from {args.traj} …")
+    ions = load_trajectories(args.traj)
     add_trajectories(plotter, ions, cmap=args.cmap)
 
     plotter.add_axes(xlabel="X (mm)", ylabel="Y (mm)", zlabel="Z (mm)")
