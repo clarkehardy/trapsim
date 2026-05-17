@@ -29,12 +29,13 @@ from .voxelize import voxelize
 
 
 def _default_solver_dir() -> str:
-    """Work dir for masks, epsilon, grid, and the compiled binary."""
+    """Work dir for masks, epsilon, grid, the compiled binary, and PA files."""
     return os.path.join(os.getcwd(), "solver")
 
 
 def _default_out_dir() -> str:
-    return os.getcwd()
+    """PA files are written alongside the work files by default."""
+    return _default_solver_dir()
 
 
 def _solver_source(solver_dir: str) -> str:

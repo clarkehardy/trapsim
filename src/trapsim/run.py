@@ -47,15 +47,16 @@ def run(geometry_path: str,
     # Auto-refine only when a PA file is missing.  STL-mtime-based staleness
     # is too aggressive (e.g. a `git mv` updates mtime without changing
     # geometry) — the user should pass --refine explicitly after editing STLs.
+    solver_dir = os.path.join(base_dir, "solver")
     pa_missing = [e.electrode_id for e in geo.electrodes
                   if not os.path.exists(os.path.join(
-                      base_dir, f"field.pa{e.electrode_id}"))]
+                      solver_dir, f"field.pa{e.electrode_id}"))]
     if do_refine or pa_missing:
         if pa_missing and not do_refine:
             print(f"── Refine: missing PA files for electrodes {pa_missing} ──")
         else:
             print("── Refine: voxelize + Laplace solve (forced) ──")
-        refine_mod.refine(geo, out_dir=base_dir,
+        refine_mod.refine(geo, out_dir=solver_dir, solver_dir=solver_dir,
                           force_voxelize=do_refine)
         print()
     else:

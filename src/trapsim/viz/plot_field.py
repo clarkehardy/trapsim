@@ -42,8 +42,9 @@ def main():
     ap.add_argument("--geometry", default=os.path.join(cwd, "geometry.yaml"))
     ap.add_argument("--schedule", default=os.path.join(cwd, "schedule_1.json"),
                     help="schedule_N.json; --time is interpreted against this.")
-    ap.add_argument("--pa-dir",   default=cwd,
-                    help="Directory containing field.pa* files")
+    ap.add_argument("--pa-dir",   default=os.path.join(cwd, "solver"),
+                    help="Directory containing field.pa* files "
+                         "(default: ./solver/)")
     ap.add_argument("--time",     type=float, default=0.0,
                     help="Time (µs) at which to resolve voltages; default 0.")
     ap.add_argument("--slice",    default="y=19",

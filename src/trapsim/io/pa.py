@@ -9,9 +9,10 @@ are encoded with two special flags:
   otherwise               → φ = raw / scale_ref   (volts per unit drive)
 
 For splat detection, prefer the boolean masks written by voxelize.py
-(`<solver_dir>/mask_<id>.raw`) over the PA encoding: SOR can leave
-free-space cells with small negative residuals that overlap the magnitude
-of the -1.0 sentinel.  See `load_electrode_mask`.
+(`<solver_dir>/mask_<id>.raw`, `<solver_dir>/dielectric_mask.raw`) over
+the PA encoding: SOR can leave free-space cells with small negative
+residuals that overlap the magnitude of the -1.0 sentinel.  See
+`load_splat_mask`.
 """
 
 from __future__ import annotations
@@ -68,28 +69,40 @@ def read_pa(path: str) -> Tuple[np.ndarray, int, int, int, float]:
     return phi.reshape(NZ, NY, NX), NX, NY, NZ, dx
 
 
-def load_electrode_mask(geometry, solver_dir: str) -> np.ndarray | None:
-    """Return the union of all electrode voxel masks from `<solver_dir>`.
+def load_splat_mask(geometry, solver_dir: str) -> np.ndarray | None:
+    """Return the union of all electrode + dielectric voxel masks from
+    `<solver_dir>` (uint8 files written by `trapsim.voxelize`).
 
-    Reads the uint8 `mask_<id>.raw` files written by `trapsim.voxelize` and
-    ORs them into a single (NZ, NY, NX) bool array marking every voxel
-    occupied by any electrode.  Used for splat detection.
+    Used for splat detection: a particle is terminated when its nearest
+    grid voxel is True.  Dielectric bodies are treated as solid obstacles
+    even though the field solver only sees their permittivity.
 
-    Returns None if any mask file is missing — callers should treat this as
-    "splat detection unavailable" rather than an error, since PA files can
-    exist without the voxelizer's work files.
+    Returns None if any required electrode mask file is missing — callers
+    should treat this as "splat detection unavailable" rather than an
+    error, since PA files can exist without the voxelizer's work files.
+    The dielectric mask is optional (geometries without dielectrics never
+    have one).
     """
     NX, NY, NZ = geometry.grid.shape
+    n_pts = NX * NY * NZ
     combined = np.zeros((NZ, NY, NX), dtype=bool)
     for elec in geometry.electrodes:
         path = os.path.join(solver_dir, f"mask_{elec.electrode_id}.raw")
         if not os.path.exists(path):
             return None
-        m = np.fromfile(path, dtype=np.uint8, count=NX * NY * NZ)
-        if m.size != NX * NY * NZ:
+        m = np.fromfile(path, dtype=np.uint8, count=n_pts)
+        if m.size != n_pts:
             raise IOError(
-                f"{path}: read {m.size} bytes, expected {NX*NY*NZ} "
+                f"{path}: read {m.size} bytes, expected {n_pts} "
                 f"({NX}×{NY}×{NZ})")
+        combined |= m.reshape(NZ, NY, NX).astype(bool)
+
+    diel_path = os.path.join(solver_dir, "dielectric_mask.raw")
+    if os.path.exists(diel_path):
+        m = np.fromfile(diel_path, dtype=np.uint8, count=n_pts)
+        if m.size != n_pts:
+            raise IOError(
+                f"{diel_path}: read {m.size} bytes, expected {n_pts}")
         combined |= m.reshape(NZ, NY, NX).astype(bool)
     return combined
 

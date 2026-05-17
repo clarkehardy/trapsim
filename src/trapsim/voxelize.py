@@ -165,6 +165,33 @@ def build_electrode_masks(geometry: GeometryConfig, out_dir: str) -> None:
         print(f"  → {path}  ({int(mask.sum())} voxels set)")
 
 
+def build_dielectric_mask(geometry: GeometryConfig, out_dir: str) -> None:
+    """Write solver/dielectric_mask.raw — union of all dielectric bodies on
+    the *node* grid (same shape as electrode masks), for splat detection.
+
+    Skipped (no file written) if there are no dielectrics.
+    """
+    if not geometry.dielectrics:
+        return
+    trimesh = _require_trimesh()
+    NX, NY, NZ = geometry.grid.shape
+    dx         = geometry.grid.dx_mm
+    world_off  = geometry.grid.world_offset_mm
+
+    print("\nVoxelizing dielectric bodies (for splat mask) ...")
+    mask = np.zeros(NX * NY * NZ, dtype=np.uint8)
+    for diel in geometry.dielectrics:
+        print(f"  Dielectric {diel.name}:")
+        mesh = trimesh.load_mesh(diel.stl)
+        sub  = _voxelize_to_nodes(
+            mesh, (NX, NY, NZ), dx, world_off,
+            label=os.path.basename(diel.stl))
+        mask |= sub
+    path = os.path.join(out_dir, "dielectric_mask.raw")
+    mask.tofile(path)
+    print(f"  → {path}  ({int(mask.sum())} voxels set)")
+
+
 def build_epsilon(geometry: GeometryConfig, out_dir: str) -> None:
     """Write solver/epsilon.raw — per-cell ε_r.  Overlapping dielectrics
     take the maximum ε_r (loud overlap rather than silent averaging)."""
@@ -209,6 +236,7 @@ def voxelize(geometry: GeometryConfig, out_dir: str) -> None:
     print(f"Written {grid_path}")
 
     build_electrode_masks(geometry, out_dir)
+    build_dielectric_mask(geometry, out_dir)
     build_epsilon(geometry, out_dir)
     print("\nVoxelization complete.")
 

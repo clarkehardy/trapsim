@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 
 from .config import GeometryConfig, ExperimentConfig, load_geometry, load_experiment
-from .io.pa import load_phi_stack, load_electrode_mask
+from .io.pa import load_phi_stack, load_splat_mask
 from .io.trajectory import write_trajectories
 from .io.schedule_io import write_schedule_snapshot
 from .schedule import Schedule
@@ -404,24 +404,24 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
     for p in experiment.physics:
         print(f"  - {p.__class__.__name__}")
 
-    # PA files
-    print(f"\nLoading PA files from {base_dir} …")
+    # PA files + splat mask both live in <base_dir>/solver/
+    solver_dir = os.path.join(base_dir, "solver")
+    print(f"\nLoading PA files from {solver_dir} …")
     t0 = time.perf_counter()
-    phi_stack, grid_dict = load_phi_stack(geometry, base_dir, verbose=True)
+    phi_stack, grid_dict = load_phi_stack(geometry, solver_dir, verbose=True)
     print(f"  PA stack: shape {phi_stack.shape}  "
           f"({phi_stack.nbytes/1e6:.0f} MB)  in {time.perf_counter()-t0:.1f} s")
 
-    # Electrode mask for splat detection: read the original voxel masks
-    # (boolean, exact) from the voxelizer's work dir, falling back to
-    # disabled splat detection if those work files aren't present.
-    solver_dir = os.path.join(base_dir, "solver")
-    electrode_mask = load_electrode_mask(geometry, solver_dir)
+    # Splat mask: read the exact boolean voxel masks (electrodes + dielectrics)
+    # from the voxelizer's work files.  Falls back to disabled splat detection
+    # if those files aren't present.
+    electrode_mask = load_splat_mask(geometry, solver_dir)
     if electrode_mask is None:
         print(f"  [warn] no mask_<id>.raw files in {solver_dir} — "
               f"splat detection disabled")
     else:
         n_elec_vox = int(electrode_mask.sum())
-        print(f"  Electrode mask: {n_elec_vox} voxels ({100*n_elec_vox/electrode_mask.size:.2f}%)")
+        print(f"  Splat mask: {n_elec_vox} voxels ({100*n_elec_vox/electrode_mask.size:.2f}%)")
 
     # Set worker globals BEFORE forking
     _W_phi_stack      = phi_stack
@@ -482,7 +482,8 @@ def main():
     ap.add_argument("--run",        type=int, default=1)
     ap.add_argument("--workers",    type=int, default=None)
     ap.add_argument("--base-dir",   default=cwd,
-                    help="Directory for field.pa* PA files and output files")
+                    help="Experiment dir; PA files are read from "
+                         "<base-dir>/solver/ and trajectories are written here")
     args = ap.parse_args()
 
     geo = load_geometry(args.geometry)
