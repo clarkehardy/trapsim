@@ -249,7 +249,12 @@ def main():
                                    _root.winfo_screenheight()]
             _root.destroy()
         except Exception:
-            pass
+            try:
+                w, h = plotter.ren_win.GetScreenSize()
+                if w > 0 and h > 0:
+                    plotter.window_size = [w, h]
+            except Exception:
+                pass
         plotter.show()
 
 
