@@ -33,6 +33,7 @@ E_C = 1.602176634e-19   # Coulombs per elementary charge
 # ── Worker globals (set in main() before fork; inherited copy-on-write) ─────
 _W_phi_stack: np.ndarray | None = None
 _W_grid: dict[str, Any] | None  = None
+_W_electrode_mask: np.ndarray | None = None
 _W_geometry: GeometryConfig | None = None
 _W_experiment: ExperimentConfig | None = None
 _W_schedule: Schedule | None    = None
@@ -125,7 +126,7 @@ def _rhs(t_us, y, env, physics):
 
 def integrate_particle(ion_id, y0, t_start, t_max_us, intg, physics, schedule,
                        env, world_offset_mm, grid_shape, grid_dx,
-                       record_stride, v_stop, verbose=True):
+                       record_stride, v_stop, electrode_mask=None, verbose=True):
     """Run one Dormand-Prince RK4/5 integration with split-operator damping."""
     # Dormand-Prince coefficients
     a21 = 1/5
@@ -253,6 +254,19 @@ def integrate_particle(ion_id, y0, t_start, t_max_us, intg, physics, schedule,
                 if record_stride > 0:
                     _record(t, y)
                 break
+            if electrode_mask is not None:
+                wox, woy, woz = world_offset_mm
+                dx = grid_dx
+                ix = int(round((y[0] - wox) / dx))
+                iy = int(round((y[1] - woy) / dx))
+                iz = int(round((y[2] - woz) / dx))
+                NX, NY, NZ = grid_shape
+                if 0 <= ix < NX and 0 <= iy < NY and 0 <= iz < NZ:
+                    if electrode_mask[iz, iy, ix]:
+                        reason = "splatted"
+                        if record_stride > 0:
+                            _record(t, y)
+                        break
             speed = math.sqrt(y[3]**2 + y[4]**2 + y[5]**2)
             if v_stop > 0 and speed < v_stop:
                 reason = "trapped"
@@ -314,7 +328,8 @@ def _worker(args):
     t0 = time.perf_counter()
     rows, info = integrate_particle(
         ion_id, y0, t_start, t_max_us, integrator, physics, schedule, env,
-        world_off, grid_shape, grid_dx, record_stride, v_stop, verbose=True)
+        world_off, grid_shape, grid_dx, record_stride, v_stop,
+        electrode_mask=_W_electrode_mask, verbose=True)
     elapsed = time.perf_counter() - t0
     print(f"  [ion {ion_id}] done: {info['steps_accepted']} acc / "
           f"{info['steps_rejected']} rej steps, t_sim={info['t_sim_us']:.1f} µs, "
@@ -357,7 +372,7 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
         run_number: int = 1,
         workers: int | None = None) -> dict:
     """Run the full fly pipeline and write outputs.  Returns a summary dict."""
-    global _W_phi_stack, _W_grid, _W_geometry, _W_experiment, _W_schedule
+    global _W_phi_stack, _W_grid, _W_electrode_mask, _W_geometry, _W_experiment, _W_schedule
 
     n_workers = workers or os.cpu_count() or 1
     print(f"━━━ trapsim.fly  run={run_number}  workers={n_workers} ━━━\n")
@@ -392,13 +407,14 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
     # PA files
     print(f"\nLoading PA files from {base_dir} …")
     t0 = time.perf_counter()
-    phi_stack, grid_dict = load_phi_stack(geometry, base_dir, verbose=True)
+    phi_stack, grid_dict, electrode_mask = load_phi_stack(geometry, base_dir, verbose=True)
     print(f"  PA stack: shape {phi_stack.shape}  "
           f"({phi_stack.nbytes/1e6:.0f} MB)  in {time.perf_counter()-t0:.1f} s")
 
     # Set worker globals BEFORE forking
-    _W_phi_stack = phi_stack
-    _W_grid      = grid_dict
+    _W_phi_stack      = phi_stack
+    _W_grid           = grid_dict
+    _W_electrode_mask = electrode_mask
     _W_geometry  = geometry
     _W_experiment = experiment
     _W_schedule  = schedule

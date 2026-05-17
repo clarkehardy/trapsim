@@ -56,7 +56,7 @@ def main():
 
     geo = load_geometry(args.geometry)
     print(f"Loading PA files for {geo.n_electrodes} electrodes …")
-    phi_stack, grid = load_phi_stack(geo, args.pa_dir, verbose=False)
+    phi_stack, grid, _ = load_phi_stack(geo, args.pa_dir, verbose=False)
     NX, NY, NZ = grid["NX"], grid["NY"], grid["NZ"]
     dx = grid["dx"]
     wox, woy, woz = geo.grid.world_offset_mm

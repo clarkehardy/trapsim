@@ -63,8 +63,29 @@ def read_pa(path: str) -> Tuple[np.ndarray, int, int, int, float]:
     return phi.reshape(NZ, NY, NX), NX, NY, NZ, dx
 
 
+def read_electrode_mask(path: str) -> np.ndarray:
+    """Return a (NZ, NY, NX) bool array marking every electrode-surface voxel.
+
+    In the PA format all electrode surfaces — not just the one driven in this
+    file — are flagged: sign-bit-set voxels are 'other electrode' surfaces and
+    voxels > 1.5·scale_ref are 'this electrode' surfaces.  The union covers
+    the complete electrode geometry and can be used for splat detection.
+    """
+    with open(path, "rb") as f:
+        hdr = f.read(HEADER_BYTES)
+        raw_bytes = f.read()
+    scale_ref = struct.unpack_from("<d", hdr,  8)[0]
+    NX        = struct.unpack_from("<i", hdr, 16)[0]
+    NY        = struct.unpack_from("<i", hdr, 20)[0]
+    NZ        = struct.unpack_from("<i", hdr, 24)[0]
+    n_pts = NX * NY * NZ
+    raw = np.frombuffer(raw_bytes, dtype="<f8", count=n_pts)
+    mask = np.signbit(raw) | (raw > 1.5 * scale_ref)
+    return mask.reshape(NZ, NY, NX)
+
+
 def load_phi_stack(geometry, base_dir: str, verbose: bool = True
-                   ) -> tuple[np.ndarray, dict]:
+                   ) -> tuple[np.ndarray, dict, np.ndarray]:
     """Load every electrode's PA file into a stacked array.
 
     Parameters
@@ -81,8 +102,12 @@ def load_phi_stack(geometry, base_dir: str, verbose: bool = True
     -------
     phi_stack : ndarray, shape (N_electrodes, NZ, NY, NX)
     grid : dict with keys NX, NY, NZ, dx
+    electrode_mask : ndarray, shape (NZ, NY, NX), bool
+        True wherever any electrode surface voxel exists (union across all
+        PA files).  Used for splat detection.
     """
     phi_list = []
+    mask = None
     grid = None
     for elec in geometry.electrodes:
         path = os.path.join(base_dir, f"field.pa{elec.electrode_id}")
@@ -97,10 +122,12 @@ def load_phi_stack(geometry, base_dir: str, verbose: bool = True
                   f"({time.perf_counter()-t0:.1f} s)", flush=True)
         if grid is None:
             grid = {"NX": NX, "NY": NY, "NZ": NZ, "dx": dx}
+            mask = read_electrode_mask(path)
         else:
             if (NX, NY, NZ) != (grid["NX"], grid["NY"], grid["NZ"]):
                 raise ValueError(
                     f"{path}: grid mismatch ({NX},{NY},{NZ}) vs "
                     f"({grid['NX']},{grid['NY']},{grid['NZ']})")
+            mask |= read_electrode_mask(path)
         phi_list.append(phi)
-    return np.stack(phi_list, axis=0), grid
+    return np.stack(phi_list, axis=0), grid, mask
