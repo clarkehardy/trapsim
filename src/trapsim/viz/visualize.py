@@ -255,6 +255,13 @@ def main():
                     plotter.window_size = [w, h]
             except Exception:
                 pass
+        if sys.platform == "darwin":
+            import subprocess as _sp, os as _os
+            _sp.Popen([
+                "osascript", "-e",
+                f"tell application \"System Events\" to set frontmost of "
+                f"(first process whose unix id is {_os.getpid()}) to true",
+            ])
         plotter.show()
 
 
