@@ -4,9 +4,13 @@ The PA binary format is a 56-byte header followed by NX·NY·NZ float64 values
 in [k][j][i] order (k = z slowest, i = x fastest).  Electrode-surface voxels
 are encoded with two special flags:
 
-  raw < 0                 → "other electrode" (sign-bit set)
-  raw > 1.5 · scale_ref   → "this electrode"  (= 1.5·scale_ref + electrode_id)
+  raw < -0.5              → "other electrode" (trapsim solver writes -1.0)
+  raw > 1.5 · scale_ref   → "this electrode"  (= 2·scale_ref + electrode_id)
   otherwise               → φ = raw / scale_ref   (volts per unit drive)
+
+The "other electrode" threshold is -0.5 rather than 0 because SOR free-space
+voxels can be slightly negative from numerical noise; the bundled solver
+always writes exactly -1.0 for electrode surfaces.
 """
 
 from __future__ import annotations
@@ -53,7 +57,7 @@ def read_pa(path: str) -> Tuple[np.ndarray, int, int, int, float]:
 
     raw = np.frombuffer(raw_bytes, dtype="<f8", count=n_pts).copy()
 
-    other_mask = np.signbit(raw)
+    other_mask = raw < -0.5
     self_mask  = raw > 1.5 * scale_ref
 
     phi = np.abs(raw) / scale_ref
@@ -67,9 +71,14 @@ def read_electrode_mask(path: str) -> np.ndarray:
     """Return a (NZ, NY, NX) bool array marking every electrode-surface voxel.
 
     In the PA format all electrode surfaces — not just the one driven in this
-    file — are flagged: sign-bit-set voxels are 'other electrode' surfaces and
-    voxels > 1.5·scale_ref are 'this electrode' surfaces.  The union covers
-    the complete electrode geometry and can be used for splat detection.
+    file — are flagged: voxels with raw < -0.5 are 'other electrode' surfaces
+    (the bundled solver writes -1.0), and voxels with raw > 1.5·scale_ref are
+    'this electrode' surfaces.  The union covers the complete electrode
+    geometry and can be used for splat detection.
+
+    The -0.5 threshold (rather than 0) rejects SOR free-space voxels that
+    happen to have tiny negative potentials from numerical noise — those are
+    not electrode surfaces.
     """
     with open(path, "rb") as f:
         hdr = f.read(HEADER_BYTES)
@@ -80,7 +89,7 @@ def read_electrode_mask(path: str) -> np.ndarray:
     NZ        = struct.unpack_from("<i", hdr, 24)[0]
     n_pts = NX * NY * NZ
     raw = np.frombuffer(raw_bytes, dtype="<f8", count=n_pts)
-    mask = np.signbit(raw) | (raw > 1.5 * scale_ref)
+    mask = (raw < -0.5) | (raw > 1.5 * scale_ref)
     return mask.reshape(NZ, NY, NX)
 
 
