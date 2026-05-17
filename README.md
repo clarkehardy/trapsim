@@ -39,7 +39,7 @@ Create `geometry.yaml` describing your electrodes and dielectrics, and `experime
 
 ```
 trapsim                 # refine if needed → fly → animate → visualize
-trapsim --run 2         # writes trajectories_2.csv, schedule_2.json
+trapsim --run 2         # writes <name>_trajectories_2.csv, <name>_schedule_2.json
 trapsim --no-animate --no-visualize
 ```
 
@@ -87,6 +87,8 @@ triggers = []
 ## `geometry.yaml` schema
 
 ```yaml
+name: paul_trap                      # optional; default = YAML file stem.
+                                     # Drives output file names — see below.
 grid:
   dx_mm: 0.5
   bounds_mm:
@@ -111,7 +113,18 @@ decoration:                          # drawn by visualize.py, no field contribut
     color: [r, g, b]
 ```
 
-Each electrode is assigned an integer `electrode_id` (1, 2, …) in declaration order — that's the suffix on the output `paulTrap.pa<id>` file. STL paths are resolved against the YAML's directory, then the repo root, then `stl/` — so `rod.stl` and `stl/rod.stl` both work.
+Each electrode is assigned an integer `electrode_id` (1, 2, …) in declaration order. STL paths are resolved against the YAML's directory, then the repo root, then `stl/` — so `rod.stl` and `stl/rod.stl` both work.
+
+The geometry **`name`** (default: YAML file stem, restricted to `[A-Za-z0-9_-]+`) is the prefix for every per-geometry output:
+
+| File | Path |
+|------|------|
+| Potential array (per electrode) | `<name>.pa<electrode_id>` |
+| Trajectories (per run) | `<name>_trajectories_<run>.csv` |
+| Schedule snapshot (per run) | `<name>_schedule_<run>.json` |
+| Solver work dir (masks, ε, grid, binary) | `solver_<name>/` |
+
+This means two geometries (`paul_trap.yaml`, `linear_trap.yaml`) can coexist in the same working directory without colliding.
 
 ---
 
@@ -214,16 +227,16 @@ All commands default to `./geometry.yaml`, `./experiment.py`, and write PA / tra
 
 ## Output file formats
 
-### `paulTrap.pa<N>` — SIMION potential array (binary)
+### `<name>.pa<electrode_id>` — SIMION potential array (binary)
 
 56-byte header (flags, scale_ref, NX, NY, NZ, dx) followed by `NX·NY·NZ` float64 in `[k][j][i]` order. Electrode-surface voxels are encoded with sign-bit or `>1.5·scale_ref`. Free-space voxels store φ/scale_ref where φ is the unit-drive potential. Read via:
 
 ```python
 from trapsim.io.pa import read_pa
-phi, NX, NY, NZ, dx = read_pa("paulTrap.pa1")
+phi, NX, NY, NZ, dx = read_pa("paul_trap.pa1")
 ```
 
-### `trajectories_<N>.csv`
+### `<name>_trajectories_<N>.csv`
 
 ```
 ion_id,t_us,x_mm,y_mm,z_mm
@@ -234,7 +247,7 @@ ion_id,t_us,x_mm,y_mm,z_mm
 
 Coordinates are in Fusion-world mm. Recorded every `record_stride` accepted integrator steps, plus start and end.
 
-### `schedule_<N>.json`
+### `<name>_schedule_<N>.json`
 
 ```json
 {

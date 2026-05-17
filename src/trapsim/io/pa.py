@@ -71,9 +71,9 @@ def load_phi_stack(geometry, base_dir: str, verbose: bool = True
     ----------
     geometry : GeometryConfig
         Electrode declaration order determines stacking order; PA files are
-        read from `<base_dir>/paulTrap.pa<electrode_id>`.
+        read from `<base_dir>/<geometry.name>.pa<electrode_id>`.
     base_dir : str
-        Directory containing the paulTrap.pa<N> files.
+        Directory containing the <name>.pa<N> files.
     verbose : bool
         Print per-file progress.
 
@@ -85,7 +85,7 @@ def load_phi_stack(geometry, base_dir: str, verbose: bool = True
     phi_list = []
     grid = None
     for elec in geometry.electrodes:
-        path = os.path.join(base_dir, f"paulTrap.pa{elec.electrode_id}")
+        path = os.path.join(base_dir, f"{geometry.name}.pa{elec.electrode_id}")
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"PA file for electrode {elec.electrode_id} ({elec.name}): {path}")

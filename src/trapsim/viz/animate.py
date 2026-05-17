@@ -151,8 +151,10 @@ def main():
     cwd = os.getcwd()
     ap = argparse.ArgumentParser()
     ap.add_argument("--geometry",   default=os.path.join(cwd, "geometry.yaml"))
-    ap.add_argument("--traj",       default=os.path.join(cwd, "trajectories_1.csv"))
-    ap.add_argument("--schedule",   default=os.path.join(cwd, "schedule_1.json"))
+    ap.add_argument("--traj",       default=None,
+                    help="default: <cwd>/<geometry.name>_trajectories_1.csv")
+    ap.add_argument("--schedule",   default=None,
+                    help="default: <cwd>/<geometry.name>_schedule_1.json")
     ap.add_argument("--fps",        type=float, default=30.0)
     ap.add_argument("--speed",      type=float, default=None,
                     help="µs of sim time per wall-second (default: 20 s total)")
@@ -163,20 +165,22 @@ def main():
     args = ap.parse_args()
 
     geo = load_geometry(args.geometry)
+    traj_path  = args.traj     or os.path.join(cwd, f"{geo.name}_trajectories_1.csv")
+    sched_path = args.schedule or os.path.join(cwd, f"{geo.name}_schedule_1.json")
 
-    ions = load_trajectories(args.traj)
+    ions = load_trajectories(traj_path)
     if not ions:
-        sys.exit(f"No trajectory data in {args.traj}")
+        sys.exit(f"No trajectory data in {traj_path}")
 
-    have_sched = os.path.exists(args.schedule)
+    have_sched = os.path.exists(sched_path)
     if not have_sched:
-        print(f"  [skip] schedule snapshot not found at {args.schedule}; "
+        print(f"  [skip] schedule snapshot not found at {sched_path}; "
               "voltage panel omitted.")
 
     # Build the Schedule for trigger logic + voltage resolution
     sched = trigger_data = None
     if have_sched:
-        snap = read_schedule_snapshot(args.schedule)
+        snap = read_schedule_snapshot(sched_path)
         sched = Schedule(snap["main"], snap["triggers"], geo.electrode_names())
         trigger_data = snap["triggers"]
 

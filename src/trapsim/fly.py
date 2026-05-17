@@ -5,8 +5,9 @@ PA files for every electrode, and integrates each particle's trajectory
 using Dormand-Prince RK4/5 with the physics list, exact damping, and
 stochastic kicks defined in experiment.py.
 
-Trajectory output: <out_dir>/trajectories_<run>.csv  (Fusion-world mm).
-Schedule snapshot: <out_dir>/schedule_<run>.json     (for animate.py).
+Trajectory output: <base_dir>/<name>_trajectories_<run>.csv  (Fusion-world mm).
+Schedule snapshot: <base_dir>/<name>_schedule_<run>.json     (for animate.py).
+Where `<name>` is the geometry name.
 """
 
 from __future__ import annotations
@@ -427,11 +428,11 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
     print(f"\nAll particles done in {elapsed:.1f} s wall")
 
     # Write outputs
-    traj_path = os.path.join(base_dir, f"trajectories_{run_number}.csv")
+    traj_path = os.path.join(base_dir, f"{geometry.name}_trajectories_{run_number}.csv")
     n_rows = write_trajectories(traj_path, rows_per_ion)
     print(f"Wrote {n_rows} rows to {traj_path}")
 
-    sched_path = os.path.join(base_dir, f"schedule_{run_number}.json")
+    sched_path = os.path.join(base_dir, f"{geometry.name}_schedule_{run_number}.json")
     write_schedule_snapshot(sched_path,
                             experiment.main_schedule,
                             experiment.triggers)
@@ -454,7 +455,7 @@ def main():
     ap.add_argument("--run",        type=int, default=1)
     ap.add_argument("--workers",    type=int, default=None)
     ap.add_argument("--base-dir",   default=cwd,
-                    help="Directory for paulTrap.pa* and output files")
+                    help="Directory for <name>.pa* PA files and output files")
     args = ap.parse_args()
 
     geo = load_geometry(args.geometry)

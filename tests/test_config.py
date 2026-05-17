@@ -132,3 +132,51 @@ class TestLoadGeometry:
         """)
         with pytest.raises(ValueError, match="at least one electrode"):
             load_geometry(geo_path)
+
+    def test_name_default_is_yaml_stem(self, tmp_path):
+        geo_path = _write_geometry(str(tmp_path), """
+            grid:
+              dx_mm: 1.0
+              bounds_mm:
+                x: [0, 10]
+                y: [0, 10]
+                z: [0, 10]
+            electrodes:
+              - name: a
+                stls: [a.stl]
+        """, stl_names=["a.stl"])
+        # File is `geometry.yaml` so name should default to "geometry"
+        geo = load_geometry(geo_path)
+        assert geo.name == "geometry"
+
+    def test_name_explicit_overrides_default(self, tmp_path):
+        geo_path = _write_geometry(str(tmp_path), """
+            name: paul_trap
+            grid:
+              dx_mm: 1.0
+              bounds_mm:
+                x: [0, 10]
+                y: [0, 10]
+                z: [0, 10]
+            electrodes:
+              - name: a
+                stls: [a.stl]
+        """, stl_names=["a.stl"])
+        geo = load_geometry(geo_path)
+        assert geo.name == "paul_trap"
+
+    def test_name_invalid_chars_raises(self, tmp_path):
+        geo_path = _write_geometry(str(tmp_path), """
+            name: "bad name with spaces"
+            grid:
+              dx_mm: 1.0
+              bounds_mm:
+                x: [0, 10]
+                y: [0, 10]
+                z: [0, 10]
+            electrodes:
+              - name: a
+                stls: [a.stl]
+        """, stl_names=["a.stl"])
+        with pytest.raises(ValueError, match=r"name .* must match"):
+            load_geometry(geo_path)

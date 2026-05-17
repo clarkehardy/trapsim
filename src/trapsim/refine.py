@@ -9,8 +9,9 @@ Usage:
 
 Steps:
   1. Voxelize STLs if mask files are stale (or --force-voxelize).
-  2. Compile solver/laplace if absent or older than laplace.cpp.
-  3. Run the C++ solver once per electrode → paulTrap.pa<id>.
+  2. Compile <solver_dir>/laplace if absent or older than laplace.cpp.
+  3. Run the C++ solver once per electrode → <out_dir>/<name>.pa<id>,
+     where `<name>` is the geometry name (defaults to the YAML file stem).
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ from .config import GeometryConfig, load_geometry
 from .voxelize import voxelize
 
 
-def _default_solver_dir() -> str:
-    """Where to put the work dir on first use — CWD-relative."""
-    return os.path.join(os.getcwd(), "solver")
+def _default_solver_dir(name: str) -> str:
+    """Per-geometry work dir holding source, binary, mask/epsilon/grid files."""
+    return os.path.join(os.getcwd(), f"solver_{name}")
 
 
 def _default_out_dir() -> str:
@@ -102,12 +103,12 @@ def refine(geometry: GeometryConfig, *,
            tol: float = 1e-5) -> None:
     """Run the full refine pipeline for `geometry`.
 
-    `out_dir` defaults to CWD; `solver_dir` defaults to `<CWD>/solver`.
+    `out_dir` defaults to CWD; `solver_dir` defaults to `<CWD>/solver_<name>`.
     """
     if out_dir is None:
         out_dir = _default_out_dir()
     if solver_dir is None:
-        solver_dir = _default_solver_dir()
+        solver_dir = _default_solver_dir(geometry.name)
 
     # ── Step 1: voxelize ────────────────────────────────────────────────
     if force_voxelize or masks_stale(geometry, solver_dir):
@@ -135,7 +136,7 @@ def refine(geometry: GeometryConfig, *,
         if not os.path.exists(f):
             sys.exit(f"ERROR: required file not found: {f}")
 
-    cmd = [exe, grid_file, eps_file, out_dir,
+    cmd = [exe, grid_file, eps_file, out_dir, geometry.name,
            str(omega), str(max_iter), str(tol)] + mask_args
     t0 = time.time()
     result = subprocess.run(cmd)
@@ -148,7 +149,7 @@ def refine(geometry: GeometryConfig, *,
     expected = 56 + NX * NY * NZ * 8
     all_ok = True
     for elec in geometry.electrodes:
-        pa = os.path.join(out_dir, f"paulTrap.pa{elec.electrode_id}")
+        pa = os.path.join(out_dir, f"{geometry.name}.pa{elec.electrode_id}")
         if not os.path.exists(pa):
             print(f"  WARNING: {pa} not found")
             all_ok = False
@@ -168,7 +169,9 @@ def main():
     ap = argparse.ArgumentParser(description="Refine potential arrays from geometry.yaml.")
     ap.add_argument("--geometry",       default=os.path.join(os.getcwd(), "geometry.yaml"))
     ap.add_argument("--out-dir",        default=_default_out_dir())
-    ap.add_argument("--solver-dir",     default=_default_solver_dir())
+    ap.add_argument("--solver-dir",     default=None,
+                    help="Work dir for source+binary+mask/epsilon/grid "
+                         "(default: ./solver_<geometry.name>/).")
     ap.add_argument("--force-voxelize", action="store_true")
     ap.add_argument("--omega",          type=float, default=1.99)
     ap.add_argument("--max-iter",       type=int,   default=3000)
