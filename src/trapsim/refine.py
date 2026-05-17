@@ -71,6 +71,17 @@ def masks_stale(geometry: GeometryConfig, solver_dir: str) -> bool:
     if geometry.dielectrics and (not os.path.exists(eps) or
                                   os.path.getmtime(eps) < stl_t):
         return True
+    # Magnetic source + mu
+    if geometry.magnets:
+        src = os.path.join(solver_dir, "magnetic_source.raw")
+        stl_t = _newest_mtime([m.stl for m in geometry.magnets])
+        if not os.path.exists(src) or os.path.getmtime(src) < stl_t:
+            return True
+    if geometry.magnetic_materials or geometry.magnets:
+        mu = os.path.join(solver_dir, "mu.raw")
+        stl_t = _newest_mtime([m.stl for m in geometry.magnetic_materials])
+        if not os.path.exists(mu) or os.path.getmtime(mu) < stl_t:
+            return True
     if not os.path.exists(os.path.join(solver_dir, "grid.txt")):
         return True
     return False
@@ -128,25 +139,46 @@ def refine(geometry: GeometryConfig, *,
     ensure_compiled(solver_dir)
     print()
 
-    # ── Step 3: solve ───────────────────────────────────────────────────
-    print(f"─── Running Laplace solver ({geometry.n_electrodes} electrodes) ───")
+    # ── Step 3a: electric solve ─────────────────────────────────────────
     grid_file = os.path.join(solver_dir, "grid.txt")
     eps_file  = os.path.join(solver_dir, "epsilon.raw")
     exe       = os.path.join(solver_dir, "laplace")
     mask_args = [os.path.join(solver_dir, f"mask_{e.electrode_id}.raw")
                  for e in geometry.electrodes]
 
-    for f in [grid_file, eps_file] + mask_args:
-        if not os.path.exists(f):
-            sys.exit(f"ERROR: required file not found: {f}")
+    if geometry.n_electrodes > 0:
+        print(f"─── Running Laplace solver: electric "
+              f"({geometry.n_electrodes} electrodes) ───")
+        for f in [grid_file, eps_file] + mask_args:
+            if not os.path.exists(f):
+                sys.exit(f"ERROR: required file not found: {f}")
+        cmd = [exe, "electric", grid_file, eps_file, out_dir,
+               str(omega), str(max_iter), str(tol)] + mask_args
+        t0 = time.time()
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            sys.exit(f"ERROR: laplace solver (electric) exited with "
+                     f"code {result.returncode}")
+        print(f"\nElectric solve finished in {time.time()-t0:.1f} s")
 
-    cmd = [exe, grid_file, eps_file, out_dir,
-           str(omega), str(max_iter), str(tol)] + mask_args
-    t0 = time.time()
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        sys.exit(f"ERROR: laplace solver exited with code {result.returncode}")
-    print(f"\nSolver finished in {time.time()-t0:.1f} s")
+    # ── Step 3b: magnetic solve (if magnets present) ────────────────────
+    if geometry.magnets:
+        mu_file  = os.path.join(solver_dir, "mu.raw")
+        src_file = os.path.join(solver_dir, "magnetic_source.raw")
+        print(f"\n─── Running Laplace solver: magnetic "
+              f"({geometry.n_magnets} magnets, "
+              f"{geometry.n_magnetic_materials} magnetic materials) ───")
+        for f in [grid_file, mu_file, src_file]:
+            if not os.path.exists(f):
+                sys.exit(f"ERROR: required file not found: {f}")
+        cmd = [exe, "magnetic", grid_file, mu_file, out_dir,
+               str(omega), str(max_iter), str(tol), src_file]
+        t0 = time.time()
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            sys.exit(f"ERROR: laplace solver (magnetic) exited with "
+                     f"code {result.returncode}")
+        print(f"\nMagnetic solve finished in {time.time()-t0:.1f} s")
 
     # ── Size check ──────────────────────────────────────────────────────
     NX, NY, NZ = geometry.grid.shape
@@ -164,6 +196,18 @@ def refine(geometry: GeometryConfig, *,
         print(f"  pa{elec.electrode_id:>2} ({elec.name:<20s}): {sz:,} bytes  {status}")
         if sz != expected:
             all_ok = False
+    if geometry.magnets:
+        pa = os.path.join(out_dir, "magfield.pa")
+        if not os.path.exists(pa):
+            print(f"  WARNING: {pa} not found")
+            all_ok = False
+        else:
+            sz = os.path.getsize(pa)
+            status = "OK" if sz == expected else (
+                f"SIZE MISMATCH (got {sz}, expected {expected})")
+            print(f"  magfield.pa: {sz:,} bytes  {status}")
+            if sz != expected:
+                all_ok = False
 
     print("\n─── Refine complete ───" if all_ok else
           "\n─── Refine completed with warnings ───")

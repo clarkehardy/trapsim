@@ -51,9 +51,13 @@ def run(geometry_path: str,
     pa_missing = [e.electrode_id for e in geo.electrodes
                   if not os.path.exists(os.path.join(
                       solver_dir, f"field.pa{e.electrode_id}"))]
-    if do_refine or pa_missing:
+    magfield_missing = (bool(geo.magnets) and not os.path.exists(
+        os.path.join(solver_dir, "magfield.pa")))
+    if do_refine or pa_missing or magfield_missing:
         if pa_missing and not do_refine:
             print(f"── Refine: missing PA files for electrodes {pa_missing} ──")
+        elif magfield_missing and not do_refine:
+            print(f"── Refine: missing magfield.pa ──")
         else:
             print("── Refine: voxelize + Laplace solve (forced) ──")
         refine_mod.refine(geo, out_dir=solver_dir, solver_dir=solver_dir,

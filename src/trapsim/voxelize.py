@@ -1,16 +1,26 @@
 """trapsim.voxelize  –  STL → per-electrode voxel masks + ε_r array.
 
 Driven entirely by a `GeometryConfig` from trapsim.config.  Writes
-`solver/mask_<id>.raw`, `solver/epsilon.raw`, and `solver/grid.txt`.
+`solver/mask_<id>.raw`, `solver/epsilon.raw`, `solver/grid.txt`, plus
+(when magnetic bodies are present) `solver/mu.raw`,
+`solver/magnetic_source.raw`, and `solver/magnetic_material_mask.raw`.
 
 The on-disk format matches the legacy voxelize.py output so the existing
 C++ Laplace solver can consume it unchanged.
 
-Mask file:    flat uint8, shape NZ×NY×NX, 1 = inside the electrode.
-Epsilon file: flat float64, shape (NZ-1)×(NY-1)×(NX-1), ε_r per cell-centre.
-Grid file:    one line "NX NY NZ DX TX TY TZ" where (TX,TY,TZ) is the
-              positive GEM offset (so a Fusion-world coord x equals
-              i*DX - TX for grid index i).
+Mask file:           flat uint8, shape NZ×NY×NX, 1 = inside electrode.
+Epsilon file:        flat float64, shape (NZ-1)×(NY-1)×(NX-1), ε_r per cell-centre.
+Mu file:             flat float64, shape (NZ-1)×(NY-1)×(NX-1), μ_r per cell-centre.
+Magnetic source:     flat float64, shape NZ×NY×NX, RHS of ∇²ψ = -source
+                     on the *node* grid.  Non-zero only in a 1-voxel-thick
+                     external shell around each magnet, where it stores
+                     (Br · n̂) / dx_mm — the discretised surface "magnetic
+                     charge" distributed over a shell of thickness dx_mm.
+Magnetic mat. mask:  flat uint8, shape NZ×NY×NX, union of all magnet +
+                     magnetic_material voxels, for splat detection.
+Grid file:           one line "NX NY NZ DX TX TY TZ" where (TX,TY,TZ) is the
+                     positive GEM offset (so a Fusion-world coord x equals
+                     i*DX - TX for grid index i).
 """
 
 from __future__ import annotations
@@ -192,6 +202,147 @@ def build_dielectric_mask(geometry: GeometryConfig, out_dir: str) -> None:
     print(f"  → {path}  ({int(mask.sum())} voxels set)")
 
 
+def build_mu(geometry: GeometryConfig, out_dir: str) -> None:
+    """Write solver/mu.raw — per-cell μ_r.  Overlapping magnetic materials
+    take the maximum μ_r (loud overlap rather than silent averaging).
+
+    Skipped (no file written) if there are no magnetic materials AND no
+    magnets — the magnetic solve isn't run in that case.  If only magnets
+    are present (no high-μ pole pieces), writes a uniform μ_r=1 array
+    because the C++ solver expects the file.
+    """
+    if not geometry.magnetic_materials and not geometry.magnets:
+        return
+    NX, NY, NZ = geometry.grid.shape
+    NXc, NYc, NZc = NX - 1, NY - 1, NZ - 1
+    dx         = geometry.grid.dx_mm
+    world_off  = geometry.grid.world_offset_mm
+
+    mu = np.ones(NZc * NYc * NXc, dtype=np.float64)
+
+    if geometry.magnetic_materials:
+        trimesh = _require_trimesh()
+        print("\nVoxelizing magnetic materials (for mu) ...")
+        for mat in geometry.magnetic_materials:
+            print(f"  Magnetic material {mat.name} (μ_r = {mat.mu_r}):")
+            mesh   = trimesh.load_mesh(mat.stl)
+            inside = _voxelize_to_cells(
+                mesh, (NX, NY, NZ), dx, world_off,
+                label=os.path.basename(mat.stl))
+            np.maximum(mu, np.where(inside, mat.mu_r, 1.0), out=mu)
+    else:
+        print("\nNo magnetic materials — writing uniform μ_r = 1.")
+
+    mu_path = os.path.join(out_dir, "mu.raw")
+    mu.tofile(mu_path)
+    n_mag = int((mu != 1.0).sum())
+    print(f"→ {mu_path}  ({n_mag} cells with μ_r ≠ 1)")
+
+
+def build_magnetic_source(geometry: GeometryConfig, out_dir: str) -> None:
+    """Write solver/magnetic_source.raw — RHS of ∇²ψ = -source on the node grid.
+
+    For each magnet, locate the 1-voxel-thick *external* shell of nodes
+    adjacent to the magnet's interior.  At each shell node, query the
+    nearest STL surface point to get the outward unit normal n̂, then
+    store (Br · n̂) / dx_mm.  The 1/dx factor distributes the surface
+    "magnetic charge" σ_M = M·n̂ over the shell as a volume source.
+
+    Skipped (no file written) if there are no magnets.
+    """
+    if not geometry.magnets:
+        return
+    trimesh = _require_trimesh()
+    from trimesh.proximity import closest_point  # heavy, import on demand
+
+    NX, NY, NZ = geometry.grid.shape
+    dx         = geometry.grid.dx_mm
+    wox, woy, woz = geometry.grid.world_offset_mm
+
+    source = np.zeros((NZ, NY, NX), dtype=np.float64)
+
+    print("\nVoxelizing magnets (computing surface source σ_M = Br·n̂/dx) ...")
+    for mag in geometry.magnets:
+        print(f"  Magnet {mag.magnet_id} ({mag.name})  Br_T = {mag.Br_T}")
+        mesh = trimesh.load_mesh(mag.stl)
+        sub  = _voxelize_to_nodes(
+            mesh, (NX, NY, NZ), dx, (wox, woy, woz),
+            label=os.path.basename(mag.stl))
+        interior = sub.reshape(NZ, NY, NX).astype(bool)
+
+        # 1-voxel external shell: any node that is *not* interior but has
+        # an immediate 6-neighbour that is interior.
+        shell = np.zeros_like(interior)
+        # Shift interior by ±1 along each axis (zeroing the wrap plane).
+        for axis, length in ((0, NZ), (1, NY), (2, NX)):
+            for direction in (-1, +1):
+                shifted = np.roll(interior, shift=direction, axis=axis)
+                if direction == -1:
+                    if axis == 0: shifted[length - 1, :, :] = False
+                    elif axis == 1: shifted[:, length - 1, :] = False
+                    else:          shifted[:, :, length - 1] = False
+                else:
+                    if axis == 0: shifted[0, :, :] = False
+                    elif axis == 1: shifted[:, 0, :] = False
+                    else:          shifted[:, :, 0] = False
+                shell |= shifted
+        shell &= ~interior
+
+        # World coords of every shell node
+        iz_s, iy_s, ix_s = np.where(shell)
+        if iz_s.size == 0:
+            print(f"    [warn] magnet {mag.name!r} has no exterior shell "
+                  f"voxels — bbox may be outside the grid")
+            continue
+        world_pts = np.column_stack([
+            ix_s * dx + wox,
+            iy_s * dx + woy,
+            iz_s * dx + woz,
+        ])
+        # Outward normal at the nearest surface point
+        _close_pts, _dists, tri_ids = closest_point(mesh, world_pts)
+        n_hat = mesh.face_normals[tri_ids]      # (N, 3), unit
+        Br = np.asarray(mag.Br_T, dtype=np.float64)
+        sigma = (n_hat @ Br) / dx               # (N,) T/mm
+        # Accumulate (multiple magnets may overlap on shared shell voxels)
+        source[iz_s, iy_s, ix_s] += sigma
+        print(f"    {iz_s.size} shell voxels  "
+              f"σ range [{sigma.min():+.3f}, {sigma.max():+.3f}] T/mm")
+
+    path = os.path.join(out_dir, "magnetic_source.raw")
+    source.tofile(path)
+    n_nz = int((source != 0.0).sum())
+    print(f"→ {path}  ({n_nz} non-zero source voxels)")
+
+
+def build_magnetic_material_mask(geometry: GeometryConfig, out_dir: str) -> None:
+    """Write solver/magnetic_material_mask.raw — union of all magnet +
+    magnetic_material voxels on the *node* grid, for splat detection.
+
+    Skipped (no file written) if there are no magnets and no magnetic
+    materials.  Magnets are included because they are solid objects too.
+    """
+    if not geometry.magnets and not geometry.magnetic_materials:
+        return
+    trimesh = _require_trimesh()
+    NX, NY, NZ = geometry.grid.shape
+    dx         = geometry.grid.dx_mm
+    world_off  = geometry.grid.world_offset_mm
+
+    print("\nVoxelizing magnetic bodies (for splat mask) ...")
+    mask = np.zeros(NX * NY * NZ, dtype=np.uint8)
+    for body in list(geometry.magnets) + list(geometry.magnetic_materials):
+        print(f"  {body.name}:")
+        mesh = trimesh.load_mesh(body.stl)
+        sub  = _voxelize_to_nodes(
+            mesh, (NX, NY, NZ), dx, world_off,
+            label=os.path.basename(body.stl))
+        mask |= sub
+    path = os.path.join(out_dir, "magnetic_material_mask.raw")
+    mask.tofile(path)
+    print(f"  → {path}  ({int(mask.sum())} voxels set)")
+
+
 def build_epsilon(geometry: GeometryConfig, out_dir: str) -> None:
     """Write solver/epsilon.raw — per-cell ε_r.  Overlapping dielectrics
     take the maximum ε_r (loud overlap rather than silent averaging)."""
@@ -238,6 +389,9 @@ def voxelize(geometry: GeometryConfig, out_dir: str) -> None:
     build_electrode_masks(geometry, out_dir)
     build_dielectric_mask(geometry, out_dir)
     build_epsilon(geometry, out_dir)
+    build_mu(geometry, out_dir)
+    build_magnetic_source(geometry, out_dir)
+    build_magnetic_material_mask(geometry, out_dir)
     print("\nVoxelization complete.")
 
 

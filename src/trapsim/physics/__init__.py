@@ -27,6 +27,7 @@ from .gravity import Gravity
 from .epstein_drag import EpsteinDrag
 from .continuum_drag import ContinuumDrag
 from .langevin import Langevin
+from .magnetic import Magnetic, BFieldSource, UniformField, ScalarPotentialPA
 
 __all__ = [
     "Physics",
@@ -35,4 +36,8 @@ __all__ = [
     "EpsteinDrag",
     "ContinuumDrag",
     "Langevin",
+    "Magnetic",
+    "BFieldSource",
+    "UniformField",
+    "ScalarPotentialPA",
 ]

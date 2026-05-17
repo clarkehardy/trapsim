@@ -97,14 +97,49 @@ def load_splat_mask(geometry, solver_dir: str) -> np.ndarray | None:
                 f"({NX}×{NY}×{NZ})")
         combined |= m.reshape(NZ, NY, NX).astype(bool)
 
-    diel_path = os.path.join(solver_dir, "dielectric_mask.raw")
-    if os.path.exists(diel_path):
-        m = np.fromfile(diel_path, dtype=np.uint8, count=n_pts)
+    for fname in ("dielectric_mask.raw", "magnetic_material_mask.raw"):
+        path = os.path.join(solver_dir, fname)
+        if not os.path.exists(path):
+            continue
+        m = np.fromfile(path, dtype=np.uint8, count=n_pts)
         if m.size != n_pts:
             raise IOError(
-                f"{diel_path}: read {m.size} bytes, expected {n_pts}")
+                f"{path}: read {m.size} bytes, expected {n_pts}")
         combined |= m.reshape(NZ, NY, NX).astype(bool)
     return combined
+
+
+def read_magfield(path: str) -> tuple[np.ndarray, int, int, int, float]:
+    """Read a magnetic-potential PA file (ψ, signed) written by the solver
+    in magnetic mode.
+
+    Returns ψ as (NZ, NY, NX) float64, plus (NX, NY, NZ, dx).  Unlike
+    `read_pa`, no electrode sentinels are expected — every voxel holds
+    `psi * SCALE_REF`, so the sign of ψ is preserved.
+    """
+    fsize = os.path.getsize(path)
+    with open(path, "rb") as f:
+        hdr = f.read(HEADER_BYTES)
+        raw_bytes = f.read()
+    scale_ref = struct.unpack_from("<d", hdr,  8)[0]
+    NX        = struct.unpack_from("<i", hdr, 16)[0]
+    NY        = struct.unpack_from("<i", hdr, 20)[0]
+    NZ        = struct.unpack_from("<i", hdr, 24)[0]
+    dx        = struct.unpack_from("<d", hdr, 32)[0]
+    n_pts = NX * NY * NZ
+    expected = HEADER_BYTES + n_pts * 8
+    if fsize != expected:
+        raise IOError(
+            f"{path}: file size {fsize} != expected {expected} "
+            f"for ({NX},{NY},{NZ}) grid")
+    raw = np.frombuffer(raw_bytes, dtype="<f8", count=n_pts).copy()
+    # Guard against accidentally pointing at an electrode PA file
+    if (raw > 1.5 * scale_ref).any():
+        raise IOError(
+            f"{path}: looks like an electrode PA file (contains 'this "
+            f"electrode' sentinel values); use read_pa() instead.")
+    psi = raw / scale_ref
+    return psi.reshape(NZ, NY, NX), NX, NY, NZ, dx
 
 
 def load_phi_stack(geometry, base_dir: str, verbose: bool = True

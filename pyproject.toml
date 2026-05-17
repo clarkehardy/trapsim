@@ -27,9 +27,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-refine = ["trimesh>=4.0"]                       # for trapsim.voxelize
+# trimesh's closest_point query (needed for magnetic source σ_M = Br·n̂)
+# pulls scipy via a soft import — declare it explicitly so the refine extra
+# is self-contained.
+refine = ["trimesh>=4.0", "scipy>=1.10"]        # for trapsim.voxelize
 viz    = ["matplotlib>=3.7", "pyvista>=0.43"]   # for trapsim.viz.*
-all    = ["trimesh>=4.0", "matplotlib>=3.7", "pyvista>=0.43"]
+all    = ["trimesh>=4.0", "scipy>=1.10", "matplotlib>=3.7", "pyvista>=0.43"]
 dev    = ["pytest>=8", "pytest-cov"]
 
 [project.scripts]

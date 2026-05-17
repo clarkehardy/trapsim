@@ -67,6 +67,26 @@ class Decoration:
 
 
 @dataclass
+class Magnet:
+    name: str
+    stl: str                      # resolved absolute path
+    Br_T: tuple[float, float, float]   # remanent flux density [Tesla]
+    magnet_id: int                # assigned 1..N in declaration order
+    color: tuple[float, float, float] = (0.85, 0.25, 0.25)
+    opacity: float = 0.45
+
+
+@dataclass
+class MagneticMaterial:
+    name: str
+    stl: str                      # resolved absolute path
+    mu_r: float                   # relative permeability (1 = vacuum)
+    material_id: int              # assigned 1..M in declaration order
+    color: tuple[float, float, float] = (0.55, 0.55, 0.55)
+    opacity: float = 0.40
+
+
+@dataclass
 class Grid:
     dx_mm: float
     bounds_mm: dict[str, tuple[float, float]]   # {"x": (lo,hi), "y": ..., "z": ...}
@@ -94,11 +114,21 @@ class GeometryConfig:
     electrodes: list[Electrode]
     dielectrics: list[Dielectric] = field(default_factory=list)
     decoration: list[Decoration] = field(default_factory=list)
+    magnets: list[Magnet] = field(default_factory=list)
+    magnetic_materials: list[MagneticMaterial] = field(default_factory=list)
     source_path: str = ""
 
     @property
     def n_electrodes(self) -> int:
         return len(self.electrodes)
+
+    @property
+    def n_magnets(self) -> int:
+        return len(self.magnets)
+
+    @property
+    def n_magnetic_materials(self) -> int:
+        return len(self.magnetic_materials)
 
     def electrode_by_name(self, name: str) -> Electrode:
         for e in self.electrodes:
@@ -108,6 +138,9 @@ class GeometryConfig:
 
     def electrode_names(self) -> list[str]:
         return [e.name for e in self.electrodes]
+
+    def magnet_names(self) -> list[str]:
+        return [m.name for m in self.magnets]
 
 
 def load_geometry(path: str) -> GeometryConfig:
@@ -184,11 +217,76 @@ def load_geometry(path: str) -> GeometryConfig:
             opacity=float(dec.get("opacity", 0.30)),
         ))
 
+    # Magnets (optional)
+    magnets = []
+    for i, m in enumerate(raw.get("magnets") or [], start=1):
+        if "name" not in m or "stl" not in m or "Br_T" not in m:
+            raise ValueError(
+                f"{path}: magnet #{i} must have 'name', 'stl', 'Br_T'")
+        Br = m["Br_T"]
+        if not (isinstance(Br, (list, tuple)) and len(Br) == 3):
+            raise ValueError(
+                f"{path}: magnet #{i} Br_T must be a 3-vector; got {Br!r}")
+        Br = tuple(float(c) for c in Br)
+        if all(c == 0.0 for c in Br):
+            raise ValueError(
+                f"{path}: magnet #{i} ({m['name']!r}) Br_T is zero — "
+                f"omit the magnet instead")
+        color = tuple(m["color"]) if "color" in m else (0.85, 0.25, 0.25)
+        magnets.append(Magnet(
+            name=str(m["name"]),
+            stl=_resolve_stl(m["stl"], base_dir),
+            Br_T=Br,
+            magnet_id=i,
+            color=color,
+            opacity=float(m.get("opacity", 0.45)),
+        ))
+
+    # Magnetic materials (optional) — anything with mu_r != 1
+    magnetic_materials = []
+    for i, mm in enumerate(raw.get("magnetic_materials") or [], start=1):
+        if "name" not in mm or "stl" not in mm or "mu_r" not in mm:
+            raise ValueError(
+                f"{path}: magnetic_material #{i} must have "
+                f"'name', 'stl', 'mu_r'")
+        mu_r = float(mm["mu_r"])
+        if mu_r <= 0.0:
+            raise ValueError(
+                f"{path}: magnetic_material #{i} ({mm['name']!r}) mu_r "
+                f"must be > 0; got {mu_r}")
+        if mu_r < 1.0:
+            print(f"  [warn] magnetic_material {mm['name']!r} has "
+                  f"mu_r={mu_r} < 1 (diamagnetic) — make sure this is "
+                  f"intentional", file=sys.stderr)
+        color = tuple(mm["color"]) if "color" in mm else (0.55, 0.55, 0.55)
+        magnetic_materials.append(MagneticMaterial(
+            name=str(mm["name"]),
+            stl=_resolve_stl(mm["stl"], base_dir),
+            mu_r=mu_r,
+            material_id=i,
+            color=color,
+            opacity=float(mm.get("opacity", 0.40)),
+        ))
+
+    # Cross-section name uniqueness across all body kinds
+    all_names = ([e.name for e in electrodes]
+                 + [d.name for d in dielectrics]
+                 + [m.name for m in magnets]
+                 + [mm.name for mm in magnetic_materials]
+                 + [dec.name for dec in decoration])
+    dupes = sorted({n for n in all_names if all_names.count(n) > 1})
+    if dupes:
+        raise ValueError(
+            f"{path}: duplicate body name(s) across electrodes / dielectrics "
+            f"/ magnets / magnetic_materials / decoration: {dupes}")
+
     return GeometryConfig(
         grid=grid,
         electrodes=electrodes,
         dielectrics=dielectrics,
         decoration=decoration,
+        magnets=magnets,
+        magnetic_materials=magnetic_materials,
         source_path=path,
     )
 
