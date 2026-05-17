@@ -2,7 +2,7 @@
 
 Geometry-agnostic particle integrator for electrode-trap simulations. Pure-Python pipeline (C++ Laplace solver + Python integrator) driven by a single `geometry.yaml` and an `experiment.py`. Designed to replace SIMION-based workflows on macOS/Linux.
 
-The default example geometry — a 400 mm RF guide to transporting particles into an optical trap — is available as a reference at [github.com/clarkehardy/rf-guide-sim](https://github.com/clarkehardy/rf-guide-sim).
+The default example geometry — a 400 mm RF guide to transport particles into an optical trap — is available as a reference at [github.com/clarkehardy/rf-guide-sim](https://github.com/clarkehardy/rf-guide-sim).
 
 ---
 
