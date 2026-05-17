@@ -83,10 +83,14 @@ class Schedule:
 
     @classmethod
     def _normalize_trigger(cls, trig: Mapping[str, Any]) -> dict[str, Any]:
+        axis = str(trig["axis"])
+        sign = -1 if axis.startswith("-") else 1
+        axis_key = axis.lstrip("-")
         return {
             "name":         str(trig["name"]),
-            "axis":         str(trig["axis"]),
-            "axis_index":   {"x": 0, "y": 1, "z": 2}[trig["axis"]],
+            "axis":         axis,
+            "axis_index":   {"x": 0, "y": 1, "z": 2}[axis_key],
+            "sign":         sign,
             "threshold_mm": float(trig["threshold_mm"]),
             "schedule":     cls._normalize(trig["schedule"]),
         }
@@ -153,7 +157,7 @@ class Schedule:
             name = trig["name"]
             if trigger_state.get(name) is not None:
                 continue
-            if pos_world_mm[trig["axis_index"]] >= trig["threshold_mm"]:
+            if trig["sign"] * pos_world_mm[trig["axis_index"]] >= trig["sign"] * trig["threshold_mm"]:
                 trigger_state[name] = t_us
                 newly.append(name)
         return newly

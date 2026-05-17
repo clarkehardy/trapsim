@@ -229,7 +229,7 @@ def load_experiment(path: str, geometry: GeometryConfig | None = None
       - every electrode name in main_schedule.dc / main_schedule.rf exists in
         geometry.electrodes
       - every electrode name in each trigger.schedule.dc / .rf exists
-      - every trigger.axis is one of {x, y, z}
+      - every trigger.axis is one of {x, y, z, -x, -y, -z}
     """
     path = os.path.abspath(path)
     mod = _import_path(path)
@@ -280,10 +280,10 @@ def _validate_against_geometry(exp: ExperimentConfig,
             if required not in trig:
                 raise ValueError(
                     f"{source}: trigger #{i} missing {required!r}")
-        if trig["axis"] not in ("x", "y", "z"):
+        if trig["axis"] not in ("x", "y", "z", "-x", "-y", "-z"):
             raise ValueError(
                 f"{source}: trigger #{i} ({trig['name']}) axis must be "
-                f"one of x/y/z; got {trig['axis']!r}")
+                f"one of x/y/z/-x/-y/-z; got {trig['axis']!r}")
         if "time_us" not in trig["schedule"]:
             raise ValueError(
                 f"{source}: trigger #{i} ({trig['name']}) schedule missing "

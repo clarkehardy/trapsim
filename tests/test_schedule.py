@@ -149,3 +149,32 @@ class TestCheckTriggers:
         fired = sched.check_triggers(500.0, pos, ts)
         assert fired == []
         assert ts["release"] == 100.0  # unchanged
+
+    def test_negative_axis_fires_below_threshold(self):
+        """axis='-y' trigger fires when y <= threshold (negative-going crossing)."""
+        trig = {
+            "name": "fall",
+            "axis": "-y",
+            "threshold_mm": -5.0,
+            "schedule": {"time_us": np.array([0, 100]),
+                         "dc": {"plate_top": np.array([0.0, 0.0])}},
+        }
+        sched = Schedule(_main_schedule(), [trig], ["plate_top", "plate_bottom"])
+        ts = sched.initial_trigger_state()
+        # y = -10 <= -5 → should fire
+        fired = sched.check_triggers(1.0, np.array([0.0, -10.0, 0.0]), ts)
+        assert "fall" in fired
+
+    def test_negative_axis_does_not_fire_above_threshold(self):
+        trig = {
+            "name": "fall",
+            "axis": "-y",
+            "threshold_mm": -5.0,
+            "schedule": {"time_us": np.array([0, 100]),
+                         "dc": {"plate_top": np.array([0.0, 0.0])}},
+        }
+        sched = Schedule(_main_schedule(), [trig], ["plate_top", "plate_bottom"])
+        ts = sched.initial_trigger_state()
+        # y = 0 > -5 → should not fire
+        fired = sched.check_triggers(1.0, np.array([0.0, 0.0, 0.0]), ts)
+        assert fired == []

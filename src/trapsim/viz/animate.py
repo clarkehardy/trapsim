@@ -76,13 +76,14 @@ def draw_geometry(ax, body_bboxes, view, view_lims):
 def compute_fire_times(ions, triggers):
     """For each trigger, return the abs time at which the first ion crossed
     its threshold along its axis (or None if no ion ever did)."""
-    axis_to_key = {"x": "x", "y": "y", "z": "z"}
     out = []
     for trig in triggers:
-        key = axis_to_key[trig["axis"]]
+        axis = trig["axis"]
+        sign = -1 if axis.startswith("-") else 1
+        key  = axis.lstrip("-")
         t_fire = np.inf
         for d in ions.values():
-            mask = d[key] >= trig["threshold_mm"]
+            mask = sign * d[key] >= sign * trig["threshold_mm"]
             if mask.any():
                 t_fire = min(t_fire, float(d["t"][mask][0]))
         out.append(t_fire if np.isfinite(t_fire) else None)
@@ -225,7 +226,7 @@ def main():
     for i, trig in enumerate(trigger_data or []):
         c = _TRIG_PALETTE[i % len(_TRIG_PALETTE)]
         # Vertical line at the threshold *only* in the panel whose axis matches
-        if trig["axis"] == "z":
+        if trig["axis"].lstrip("-") == "z":
             for ax in (ax_xz, ax_yz):
                 ax.axvline(trig["threshold_mm"], color=c, lw=1.5,
                            ls=(0, (4, 2)), alpha=0.85,
