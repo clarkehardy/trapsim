@@ -4,13 +4,14 @@ The PA binary format is a 56-byte header followed by NX·NY·NZ float64 values
 in [k][j][i] order (k = z slowest, i = x fastest).  Electrode-surface voxels
 are encoded with two special flags:
 
-  raw < -0.5              → "other electrode" (trapsim solver writes -1.0)
-  raw > 1.5 · scale_ref   → "this electrode"  (= 2·scale_ref + electrode_id)
+  raw < 0                 → "other electrode"  (trapsim solver writes -1.0)
+  raw > 1.5 · scale_ref   → "this electrode"   (= 2·scale_ref + electrode_id)
   otherwise               → φ = raw / scale_ref   (volts per unit drive)
 
-The "other electrode" threshold is -0.5 rather than 0 because SOR free-space
-voxels can be slightly negative from numerical noise; the bundled solver
-always writes exactly -1.0 for electrode surfaces.
+For splat detection, prefer the boolean masks written by voxelize.py
+(`<solver_dir>/mask_<id>.raw`) over the PA encoding: SOR can leave
+free-space cells with small negative residuals that overlap the magnitude
+of the -1.0 sentinel.  See `load_electrode_mask`.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ def read_pa(path: str) -> Tuple[np.ndarray, int, int, int, float]:
 
     raw = np.frombuffer(raw_bytes, dtype="<f8", count=n_pts).copy()
 
-    other_mask = raw < -0.5
+    other_mask = raw < 0
     self_mask  = raw > 1.5 * scale_ref
 
     phi = np.abs(raw) / scale_ref
@@ -67,34 +68,34 @@ def read_pa(path: str) -> Tuple[np.ndarray, int, int, int, float]:
     return phi.reshape(NZ, NY, NX), NX, NY, NZ, dx
 
 
-def read_electrode_mask(path: str) -> np.ndarray:
-    """Return a (NZ, NY, NX) bool array marking every electrode-surface voxel.
+def load_electrode_mask(geometry, solver_dir: str) -> np.ndarray | None:
+    """Return the union of all electrode voxel masks from `<solver_dir>`.
 
-    In the PA format all electrode surfaces — not just the one driven in this
-    file — are flagged: voxels with raw < -0.5 are 'other electrode' surfaces
-    (the bundled solver writes -1.0), and voxels with raw > 1.5·scale_ref are
-    'this electrode' surfaces.  The union covers the complete electrode
-    geometry and can be used for splat detection.
+    Reads the uint8 `mask_<id>.raw` files written by `trapsim.voxelize` and
+    ORs them into a single (NZ, NY, NX) bool array marking every voxel
+    occupied by any electrode.  Used for splat detection.
 
-    The -0.5 threshold (rather than 0) rejects SOR free-space voxels that
-    happen to have tiny negative potentials from numerical noise — those are
-    not electrode surfaces.
+    Returns None if any mask file is missing — callers should treat this as
+    "splat detection unavailable" rather than an error, since PA files can
+    exist without the voxelizer's work files.
     """
-    with open(path, "rb") as f:
-        hdr = f.read(HEADER_BYTES)
-        raw_bytes = f.read()
-    scale_ref = struct.unpack_from("<d", hdr,  8)[0]
-    NX        = struct.unpack_from("<i", hdr, 16)[0]
-    NY        = struct.unpack_from("<i", hdr, 20)[0]
-    NZ        = struct.unpack_from("<i", hdr, 24)[0]
-    n_pts = NX * NY * NZ
-    raw = np.frombuffer(raw_bytes, dtype="<f8", count=n_pts)
-    mask = (raw < -0.5) | (raw > 1.5 * scale_ref)
-    return mask.reshape(NZ, NY, NX)
+    NX, NY, NZ = geometry.grid.shape
+    combined = np.zeros((NZ, NY, NX), dtype=bool)
+    for elec in geometry.electrodes:
+        path = os.path.join(solver_dir, f"mask_{elec.electrode_id}.raw")
+        if not os.path.exists(path):
+            return None
+        m = np.fromfile(path, dtype=np.uint8, count=NX * NY * NZ)
+        if m.size != NX * NY * NZ:
+            raise IOError(
+                f"{path}: read {m.size} bytes, expected {NX*NY*NZ} "
+                f"({NX}×{NY}×{NZ})")
+        combined |= m.reshape(NZ, NY, NX).astype(bool)
+    return combined
 
 
 def load_phi_stack(geometry, base_dir: str, verbose: bool = True
-                   ) -> tuple[np.ndarray, dict, np.ndarray]:
+                   ) -> tuple[np.ndarray, dict]:
     """Load every electrode's PA file into a stacked array.
 
     Parameters
@@ -111,12 +112,8 @@ def load_phi_stack(geometry, base_dir: str, verbose: bool = True
     -------
     phi_stack : ndarray, shape (N_electrodes, NZ, NY, NX)
     grid : dict with keys NX, NY, NZ, dx
-    electrode_mask : ndarray, shape (NZ, NY, NX), bool
-        True wherever any electrode surface voxel exists (union across all
-        PA files).  Used for splat detection.
     """
     phi_list = []
-    mask = None
     grid = None
     for elec in geometry.electrodes:
         path = os.path.join(base_dir, f"field.pa{elec.electrode_id}")
@@ -131,12 +128,10 @@ def load_phi_stack(geometry, base_dir: str, verbose: bool = True
                   f"({time.perf_counter()-t0:.1f} s)", flush=True)
         if grid is None:
             grid = {"NX": NX, "NY": NY, "NZ": NZ, "dx": dx}
-            mask = read_electrode_mask(path)
         else:
             if (NX, NY, NZ) != (grid["NX"], grid["NY"], grid["NZ"]):
                 raise ValueError(
                     f"{path}: grid mismatch ({NX},{NY},{NZ}) vs "
                     f"({grid['NX']},{grid['NY']},{grid['NZ']})")
-            mask |= read_electrode_mask(path)
         phi_list.append(phi)
-    return np.stack(phi_list, axis=0), grid, mask
+    return np.stack(phi_list, axis=0), grid

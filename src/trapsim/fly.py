@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 
 from .config import GeometryConfig, ExperimentConfig, load_geometry, load_experiment
-from .io.pa import load_phi_stack
+from .io.pa import load_phi_stack, load_electrode_mask
 from .io.trajectory import write_trajectories
 from .io.schedule_io import write_schedule_snapshot
 from .schedule import Schedule
@@ -407,9 +407,21 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
     # PA files
     print(f"\nLoading PA files from {base_dir} …")
     t0 = time.perf_counter()
-    phi_stack, grid_dict, electrode_mask = load_phi_stack(geometry, base_dir, verbose=True)
+    phi_stack, grid_dict = load_phi_stack(geometry, base_dir, verbose=True)
     print(f"  PA stack: shape {phi_stack.shape}  "
           f"({phi_stack.nbytes/1e6:.0f} MB)  in {time.perf_counter()-t0:.1f} s")
+
+    # Electrode mask for splat detection: read the original voxel masks
+    # (boolean, exact) from the voxelizer's work dir, falling back to
+    # disabled splat detection if those work files aren't present.
+    solver_dir = os.path.join(base_dir, "solver")
+    electrode_mask = load_electrode_mask(geometry, solver_dir)
+    if electrode_mask is None:
+        print(f"  [warn] no mask_<id>.raw files in {solver_dir} — "
+              f"splat detection disabled")
+    else:
+        n_elec_vox = int(electrode_mask.sum())
+        print(f"  Electrode mask: {n_elec_vox} voxels ({100*n_elec_vox/electrode_mask.size:.2f}%)")
 
     # Set worker globals BEFORE forking
     _W_phi_stack      = phi_stack
