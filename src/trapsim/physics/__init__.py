@@ -25,8 +25,6 @@ from .base import Physics
 from .electrostatic import Electrostatic
 from .gravity import Gravity
 from .epstein_drag import EpsteinDrag
-from .stokes_drag import StokesDrag
-from .schiller_naumann_drag import SchillerNaumannDrag
 from .continuum_drag import ContinuumDrag
 from .langevin import Langevin
 
@@ -35,8 +33,6 @@ __all__ = [
     "Electrostatic",
     "Gravity",
     "EpsteinDrag",
-    "StokesDrag",
-    "SchillerNaumannDrag",
     "ContinuumDrag",
     "Langevin",
 ]

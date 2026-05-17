@@ -257,9 +257,7 @@ Built-in classes (in `trapsim.physics`):
 - `Electrostatic()` — `q·E/m` from `env.field`
 - `Gravity(g_mm_us2=9.81e-9, axis="-y")`
 - `EpsteinDrag(pressure_pa, temperature_k, gas_mass_amu, pressure_ramp=None, scale=1.0)` — free-molecular drag (Kn >> 1); use for sub-µm particles at sub-bar pressures. `pressure_ramp = {"trigger": "release", "p_final_pa": 100.0, "duration_us": 5e5}` ramps pressure linearly starting at the named trigger's fire time.
-- `StokesDrag(eta_pa_s)` — continuum linear drag, F = −6πηrv (Kn << 1, Re < 1); implemented via `damping_rate()`, so Langevin is compatible.
-- `SchillerNaumannDrag(rho_gas_kg_m3, eta_pa_s)` — empirical C_D correlation, valid Re ~ 0–800; reduces to Stokes as Re → 0. Implemented via `accel()` so Langevin does not see this damping — omit Langevin when using this class (thermal noise is negligible for particles large enough to reach Re > 1).
-- `ContinuumDrag(rho_gas_kg_m3, eta_pa_s, re_crossover=1.0)` — auto-switching: Schiller-Naumann (via `accel`) when Re > `re_crossover`, Stokes (via `damping_rate`) when Re ≤ `re_crossover`. Use this with `Langevin` when the same particle transitions between free fall (Re > 1) and a trapped state (Re ≪ 1) — Langevin is dormant during the fall and activates automatically once the particle slows down.
+- `ContinuumDrag(rho_gas_kg_m3, eta_pa_s, re_crossover=1.0)` — continuum drag (Kn << 1); Schiller-Naumann (via `accel`) when Re > `re_crossover`, Stokes (via `damping_rate`) when Re ≤ `re_crossover`. Works across the full range from creeping flow to moderate inertial flow (Re ~ 0–800). Pair with `Langevin`: it is dormant at high Re and activates automatically once the particle slows into the Stokes regime.
 - `Langevin(temperature_k)` — FDT noise scaled to `env.total_damping_rate`
 
 ---
