@@ -107,6 +107,80 @@ triggers = []
 
 ---
 
+## How it works
+
+The pipeline has four stages. Each maps directly to a module you can call independently.
+
+### 1. Geometry → voxel masks (`trapsim.voxelize`, `trapsim.refine`)
+
+Each electrode is described by one or more STL mesh files. `trapsim.voxelize` rasterizes every mesh onto a uniform Cartesian grid of spacing `dx_mm` using a signed-distance field (via `trimesh`). The output is one binary mask per electrode: a 3-D boolean array indicating which voxels lie on that electrode's surface. A separate mask is written for each dielectric body, storing its relative permittivity ε_r.
+
+### 2. Solving Laplace's equation (`solver/laplace.cpp`)
+
+For each electrode *i*, the bundled C++ solver finds the electrostatic potential φᵢ(**r**) satisfying
+
+```
+∇²φᵢ(r) = 0
+φᵢ = 1 V  on electrode i
+φᵢ = 0 V  on all other electrodes
+∂φᵢ/∂n = 0  on domain boundaries (Neumann)
+```
+
+The solver uses **successive over-relaxation (SOR)** — a iterative finite-difference method — with a convergence tolerance set by `tol` and a maximum iteration count `max_iter`. Dielectric interface voxels modify the finite-difference stencil via effective-permittivity averaging (ε_eff = harmonic mean across the interface).
+
+The result for each electrode is saved as a **SIMION-format potential array** (`field.pa<i>`): a binary file holding the unit-drive potential φᵢ at every grid point.
+
+`trapsim.refine` orchestrates this stage: it compiles the C++ solver on first use, runs voxelization, then calls the solver once per electrode.
+
+### 3. Superposition and field evaluation (`trapsim.io.pa`, `trapsim.schedule`)
+
+Because Laplace's equation is **linear**, the total electrostatic potential at any instant is a weighted sum over the pre-computed unit solutions:
+
+```
+φ(r, t) = Σᵢ Vᵢ(t) · φᵢ(r)
+```
+
+where Vᵢ(t) is the voltage on electrode *i* at time *t*. The electric field is
+
+```
+E(r, t) = −∇φ(r, t)
+```
+
+computed via central finite differences on the grid and **trilinearly interpolated** to the particle's position. This means a full field solve is never repeated during particle integration — only cheap dot products and interpolations.
+
+The voltages Vᵢ(t) are defined by the schedule in `experiment.py`. Each electrode can carry a piecewise-linear DC component and/or an RF drive V(t) = A(t) cos(ωt + φ₀). **Triggers** add a second layer: when a particle crosses a position threshold along a specified axis, the schedule for selected electrodes switches to a new waveform (e.g. opening or closing a trap gate). Multiple triggers are applied in order of fire time, with later-firing triggers taking precedence on any contested electrode.
+
+### 4. Particle integration (`trapsim.fly`)
+
+Trajectories are advanced using the **Dormand-Prince RK4/5** adaptive integrator. At each candidate step of size Δt:
+
+- The RK4 and RK5 estimates are compared; the step is accepted if the velocity error is within `atol + rtol·|v|`, and Δt is adjusted up or down for the next step accordingly.
+
+On each **accepted** step, three things happen in sequence:
+
+1. **Deterministic acceleration** — each physics module's `accel(t, r, v)` is summed to give the total **a**(**r**, **v**, t). This includes the electrostatic force **F** = q**E**/**m**, gravity, and (for nonlinear drag regimes) drag acceleration.
+
+2. **Linear damping** — each module's `damping_rate(t, r, v)` is summed into a total γ [µs⁻¹]. Rather than approximating drag as an additional acceleration −γ**v** (which is numerically stiff at large Δt), the velocity is updated by the **exact exponential factor**:
+
+   ```
+   v ← v · exp(−γ Δt)
+   ```
+
+   For `EpsteinDrag` (free-molecular regime, Kn ≫ 1): γ = (8π/3) r² P / (m c̄), where c̄ = √(8k_BT/πM) is the mean thermal speed of the background gas.  
+   For `ContinuumDrag` (continuum regime, Kn ≪ 1): γ = 6πηr/m (Stokes) when Re ≤ 1, switching to Schiller-Naumann (via `accel`) when Re > 1.
+
+3. **Stochastic kick** — `Langevin` draws a random velocity increment from the **fluctuation-dissipation theorem**: the variance per Cartesian component is
+
+   ```
+   σ² = (k_B T / m) · (1 − exp(−2γ Δt))
+   ```
+
+   which recovers the Maxwell-Boltzmann distribution at equilibrium for any step size. The same γ used in step 2 appears here, ensuring thermodynamic consistency.
+
+Trajectories are recorded every `record_stride` accepted steps (plus start and end) and written to `trajectories_<N>.csv`. A snapshot of the voltage schedule as used is written to `schedule_<N>.json`.
+
+---
+
 ## `geometry.yaml` schema
 
 ```yaml
