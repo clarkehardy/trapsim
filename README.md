@@ -35,12 +35,21 @@ The C++ Laplace solver compiles on first `trapsim.refine` call via `make` (needs
 
 ## Quickstart
 
-Create `geometry.yaml` describing your electrodes and dielectrics, and `experiment.py` describing your particles, voltage schedule, triggers, and physics. Then:
+Create three files: `geometry.yaml` (electrodes and dielectrics), `experiment.py` (particles, voltage schedule, triggers, physics), and a thin `run.py` shim:
+
+```python
+# run.py
+from trapsim.run import main
+if __name__ == "__main__":
+    main()
+```
+
+Then:
 
 ```
-trapsim                 # refine if needed → fly → animate → visualize
-trapsim --run 2         # writes <name>_trajectories_2.csv, <name>_schedule_2.json
-trapsim --no-animate --no-visualize
+python run.py                 # refine if needed → fly → animate → visualize
+python run.py --run 2         # writes <name>_trajectories_2.csv, <name>_schedule_2.json
+python run.py --no-animate --no-visualize
 ```
 
 Minimal `geometry.yaml`:
@@ -80,7 +89,7 @@ main_schedule = {"time_us": t, "dc": {"plate_top":  10*np.ones_like(t),
 triggers = []
 ```
 
-`pip install "trapsim[viz] @ git+..."`, drop in your STL files, then `trapsim`. The solver, voxelizer, integrator, animator, and 3D viewer all work without further setup.
+`pip install "trapsim[viz] @ git+..."`, drop in your STL files, then `python run.py`. The solver, voxelizer, integrator, animator, and 3D viewer all work without further setup.
 
 ---
 
@@ -214,7 +223,7 @@ Built-in classes (in `trapsim.physics`):
 
 | Command | Equivalent | Notes |
 |---------|-----------|-------|
-| `trapsim` | `python -m trapsim.run` | Full pipeline orchestrator |
+| `python run.py` | `python -m trapsim.run` | Full pipeline orchestrator (run.py is your project's thin shim) |
 | `python -m trapsim.refine` | | Voxelize + Laplace solve only |
 | `python -m trapsim.fly` | | Particle integration only |
 | `python -m trapsim.viz.animate` | | 2-D matplotlib animation |
@@ -277,7 +286,7 @@ src/trapsim/
   refine.py              orchestrates voxelize + C++ Laplace solve
   fly.py                 Dormand-Prince RK4/5 integrator + workers
   schedule.py            Schedule + trigger resolution
-  run.py                 full-pipeline orchestrator (`trapsim` CLI entry)
+  run.py                 full-pipeline orchestrator (invoked via your project's run.py shim)
   physics/               pluggable physics modules
   io/                    PA, trajectory, schedule readers/writers
   viz/                   animate, visualize, plot_field
