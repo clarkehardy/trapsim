@@ -147,6 +147,38 @@ Output files (all written into the simulation folder):
 
 ---
 
+## Exporting STL files from CAD
+
+Each rigid body that you want as an independent voltage source, dielectric, or decoration needs its own binary-STL export. Bodies wired together (e.g. four rods on the same RF supply) get listed under the same electrode `name` in `geometry.yaml`; the voxelizer takes the union of their meshes.
+
+The simulation volume (`grid.bounds_mm`) must enclose every body. The grid spacing (`grid.dx_mm`) sets the accuracy/memory tradeoff — at 0.5 mm a 130×90×850 grid uses ~80 MB per electrode.
+
+### Autodesk Fusion
+
+1. In the canvas, right-click the component → **Find in Browser**.
+2. Expand to the **Body**, right-click → **Isolate**.
+3. Right-click the top-level assembly → **Save As Mesh**.
+4. **Format:** STL (Binary), **Unit Type:** Millimeter, **Structure:** One File, **Refinement:** High.
+5. Save to `stl/<body_name>.stl`.
+
+### SolidWorks
+
+1. Open the assembly file in SolidWorks.
+2. Select the part(s) you want to export.
+3. Right-click → **Invert Selection**.
+4. Right-click any of the inverted selection → **Hide Components**.
+5. **File → Save As → Save as type: STL → Options**:
+   - **Unit:** Millimeters
+   - **Do not translate STL output data to positive space** (keeps the part in assembly coordinates)
+   - **Save all components of an assembly in a single file**
+   - → **OK → Save**
+6. Undo **Hide Components**.
+7. Repeat for each independent body.
+
+Both workflows give you binary STL files in assembly-world mm coordinates — that's what `geometry.yaml`'s `bounds_mm` should be expressed in, too.
+
+---
+
 ## `experiment.py` shape
 
 Edit the six blocks below for a new run; all electrode names must match `geometry.yaml`.
