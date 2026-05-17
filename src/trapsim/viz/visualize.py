@@ -242,6 +242,14 @@ def main():
         plotter.show(screenshot=args.screenshot, auto_close=True)
         print(f"Saved: {args.screenshot}")
     else:
+        try:
+            import tkinter as _tk
+            _root = _tk.Tk(); _root.withdraw()
+            plotter.window_size = [_root.winfo_screenwidth(),
+                                   _root.winfo_screenheight()]
+            _root.destroy()
+        except Exception:
+            pass
         plotter.show()
 
 
