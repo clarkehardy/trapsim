@@ -223,14 +223,22 @@ def main():
 
     # Trigger overlays
     _TRIG_PALETTE = ["darkorchid", "tomato", "mediumseagreen", "saddlebrown"]
+    _LS = (0, (4, 2))
     for i, trig in enumerate(trigger_data or []):
-        c = _TRIG_PALETTE[i % len(_TRIG_PALETTE)]
-        # Vertical line at the threshold *only* in the panel whose axis matches
-        if trig["axis"].lstrip("-") == "z":
+        c         = _TRIG_PALETTE[i % len(_TRIG_PALETTE)]
+        bare_axis = trig["axis"].lstrip("-")
+        thresh    = trig["threshold_mm"]
+        label     = f"trig {trig['name']}: {bare_axis}={thresh:.0f}"
+        if bare_axis == "z":
+            # z is the shared x-axis of both panels → vertical line in both
             for ax in (ax_xz, ax_yz):
-                ax.axvline(trig["threshold_mm"], color=c, lw=1.5,
-                           ls=(0, (4, 2)), alpha=0.85,
-                           label=f"trig {trig['name']}: z={trig['threshold_mm']:.0f}")
+                ax.axvline(thresh, color=c, lw=1.5, ls=_LS, alpha=0.85, label=label)
+        elif bare_axis == "y":
+            # y is the y-axis of the side panel (ax_yz) → horizontal line there
+            ax_yz.axhline(thresh, color=c, lw=1.5, ls=_LS, alpha=0.85, label=label)
+        elif bare_axis == "x":
+            # x is the y-axis of the top panel (ax_xz) → horizontal line there
+            ax_xz.axhline(thresh, color=c, lw=1.5, ls=_LS, alpha=0.85, label=label)
 
     # Ion trails
     cmap = plt.cm.tab10 if len(ions) <= 10 else plt.cm.viridis
