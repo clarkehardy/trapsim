@@ -51,6 +51,70 @@ def read_binary_stl_bbox(path):
     return tuple(mins), tuple(maxs), n
 
 
+MAT4_IDENTITY = (1.0, 0.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0, 0.0,
+                 0.0, 0.0, 1.0, 0.0,
+                 0.0, 0.0, 0.0, 1.0)
+
+
+def mat4_multiply(a, b):
+    """Row-major 4x4 (length-16) matrix product a·b."""
+    out = [0.0] * 16
+    for r in range(4):
+        for c in range(4):
+            out[4 * r + c] = (a[4 * r + 0] * b[0 + c] + a[4 * r + 1] * b[4 + c]
+                              + a[4 * r + 2] * b[8 + c] + a[4 * r + 3] * b[12 + c])
+    return out
+
+
+def transform_points(m, coords):
+    """Apply a row-major 4x4 matrix to a flat [x0,y0,z0, x1,...] list."""
+    out = []
+    for i in range(0, len(coords), 3):
+        x, y, z = coords[i], coords[i + 1], coords[i + 2]
+        out.append(m[0] * x + m[1] * y + m[2] * z + m[3])
+        out.append(m[4] * x + m[5] * y + m[6] * z + m[7])
+        out.append(m[8] * x + m[9] * y + m[10] * z + m[11])
+    return out
+
+
+def bbox_of_points(coords):
+    """((min3), (max3)) of a flat [x0,y0,z0, x1,...] coordinate list."""
+    xs, ys, zs = coords[0::3], coords[1::3], coords[2::3]
+    if not xs:
+        raise ValueError("no points")
+    return ((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+
+
+def write_binary_stl(path, coords, indices, scale=1.0):
+    """Write a binary STL from flat vertex coords and triangle node indices
+    (3 per triangle).  Coordinates are multiplied by `scale` on the way out
+    (Fusion tessellates in cm; trapsim wants mm → scale=10).  Facet normals
+    are computed from the triangle winding order."""
+    n = len(indices) // 3
+    if n == 0:
+        raise ValueError("no triangles")
+    with open(path, "wb") as f:
+        f.write(b"trapsim FusionExportSTL".ljust(80, b"\0"))
+        f.write(struct.pack("<I", n))
+        for t in range(n):
+            v = []
+            for idx in indices[3 * t:3 * t + 3]:
+                v.append((coords[3 * idx] * scale,
+                          coords[3 * idx + 1] * scale,
+                          coords[3 * idx + 2] * scale))
+            e1 = (v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2])
+            e2 = (v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2])
+            nx = e1[1] * e2[2] - e1[2] * e2[1]
+            ny = e1[2] * e2[0] - e1[0] * e2[2]
+            nz = e1[0] * e2[1] - e1[1] * e2[0]
+            norm = (nx * nx + ny * ny + nz * nz) ** 0.5
+            if norm > 0.0:
+                nx, ny, nz = nx / norm, ny / norm, nz / norm
+            f.write(_TRI_RECORD.pack(nx, ny, nz,
+                                     *v[0], *v[1], *v[2], 0))
+
+
 def scale_binary_stl(path, factor):
     """Scale all vertex coordinates (not normals) in-place by `factor`.
     Used to convert a cm-unit export (Fusion's internal unit, which the API

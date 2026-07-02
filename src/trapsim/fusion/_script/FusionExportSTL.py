@@ -14,15 +14,18 @@ Flow (all in one shot):
      with .assemblyContext set to the specific Occurrence clicked, so
      ':1' and ':2' copies are naturally distinguished).
   5. Write fusion_map.yaml.
-  6. For each mapped body, programmatically reproduce the manual export
-     recipe: hide every occurrence and body (what Isolate does), show only
-     the target body and its occurrence chain, then export the TOP-LEVEL
-     assembly via Design.exportManager.  Exporting from the top level is
-     what bakes the occurrence transforms in — exporting the body (even its
-     proxy) directly writes body-LOCAL coordinates and stacks every part at
-     the origin.  Visibility state is restored afterwards.
-  7. Verify each written STL: its bounding box must match the body's
-     assembly-world bounding box, so a wrong-frame export fails loudly.
+  6. For each mapped body, tessellate it in-process (MeshCalculator — the
+     same tessellator the export dialog uses) and write the binary STL
+     directly.  Fusion's exportManager is NOT used: empirically its STL
+     writer emits body-LOCAL coordinates no matter what it is handed
+     (body, proxy, or isolated top-level component), silently discarding
+     occurrence transforms.
+  7. The assembly-world placement is chosen by verification, not trust:
+     the mesh is tried as-returned and under the composed occurrence-chain
+     transforms, and the candidate whose bounding box matches the body
+     proxy's world bounding box (a reliable proxy query) is written.  If
+     no candidate matches, nothing is written and the error reports every
+     candidate box.
 
 The script has no state between runs beyond fusion_map.yaml + a
 last-used-folder preference stored in Fusion's user prefs.
@@ -141,9 +144,8 @@ def run(_context):
         r = ui.messageBox(
             f"Ready to export {len(resolved)} of {len(targets)} STL files.\n"
             f"Destination: {folder}\n\n"
-            "Each body is temporarily isolated during its export "
-            "(visibility is restored afterwards).  "
-            "Existing files will be overwritten.  Proceed?",
+            "Meshes are computed in-process; nothing in your design is "
+            "modified.  Existing files will be overwritten.  Proceed?",
             "Export",
             adsk.core.MessageBoxButtonTypes.YesNoButtonType)
         if r != adsk.core.DialogResults.DialogYes:
@@ -320,114 +322,37 @@ def _prompt_pick(ui, category, entity_name, stl_path):
     return (occ_path, body.name)
 
 
-# ── Visibility bookkeeping ────────────────────────────────────────────────────
-# Body light bulbs are a property of the NATIVE body: hiding "Body1" of a
-# component hides it in every occurrence of that component.  So isolating one
-# copy of a 4×-instanced rod means: show the native body, show the occurrence
-# chain leading to the wanted copy, and keep the sibling copies' occurrences
-# hidden.  Occurrence bulbs are per-occurrence, which is what makes this work.
-
-def _record_visibility(design):
-    root = design.rootComponent
-    occ_states, folder_states, body_states = [], [], []
-    occs = root.allOccurrences
-    for i in range(occs.count):
-        o = occs.item(i)
-        occ_states.append((o, o.isLightBulbOn))
-    comps = design.allComponents
-    for i in range(comps.count):
-        c = comps.item(i)
-        folder_states.append((c, c.isBodiesFolderLightBulbOn))
-        bodies = c.bRepBodies
-        for j in range(bodies.count):
-            b = bodies.item(j)
-            body_states.append((b, b.isLightBulbOn))
-    return occ_states, folder_states, body_states
-
-
-def _restore_visibility(state):
-    occ_states, folder_states, body_states = state
-    for o, on in occ_states:
-        try:
-            o.isLightBulbOn = on
-        except Exception:                                            # noqa: BLE001
-            pass
-    for c, on in folder_states:
-        try:
-            c.isBodiesFolderLightBulbOn = on
-        except Exception:                                            # noqa: BLE001
-            pass
-    for b, on in body_states:
-        try:
-            b.isLightBulbOn = on
-        except Exception:                                            # noqa: BLE001
-            pass
-
-
-def _isolate(design, chain, body_proxy):
-    """Reproduce the manual Isolate: hide every occurrence and body, then
-    show only `body_proxy` and the occurrence chain leading to it."""
-    root = design.rootComponent
-    occs = root.allOccurrences
-    for i in range(occs.count):
-        occs.item(i).isLightBulbOn = False
-    comps = design.allComponents
-    for i in range(comps.count):
-        bodies = comps.item(i).bRepBodies
-        for j in range(bodies.count):
-            bodies.item(j).isLightBulbOn = False
-    for occ in chain:
-        occ.isLightBulbOn = True
-    body_proxy.parentComponent.isBodiesFolderLightBulbOn = True
-    body_proxy.isLightBulbOn = True
-
-
 # ── STL export ────────────────────────────────────────────────────────────────
 
 def _export_all(design, folder, resolved, stored_map):
-    """Export each mapped body by isolating it and exporting the top-level
-    assembly — the only path through Fusion's export pipeline that applies
-    occurrence transforms, i.e. produces assembly-world coordinates.
+    """Tessellate each mapped body in-process and write its STL directly,
+    placing the triangles in assembly-world coordinates (see _export_body).
 
     Writes a per-run report to fusion_export_log.txt in the simulation
     folder so results survive the summary dialog being dismissed."""
     exported = 0
     errors = []
     log = [time.strftime("FusionExportSTL run  %Y-%m-%d %H:%M:%S")]
-    mgr = design.exportManager
     root = design.rootComponent
-    state = _record_visibility(design)
-    try:
-        for stl_rel, body_proxy in resolved.items():
-            out = (stl_rel if os.path.isabs(stl_rel)
-                   else os.path.join(folder, stl_rel))
-            try:
-                os.makedirs(os.path.dirname(out), exist_ok=True)
-                occ_path = stored_map.get(stl_rel, ("", ""))[0]
-                chain = _resolve_chain(root, occ_path) or []
-                _isolate(design, chain, body_proxy)
-                adsk.doEvents()
-                opts = mgr.createSTLExportOptions(root, out)
-                opts.meshRefinement = (
-                    adsk.fusion.MeshRefinementSettings.MeshRefinementHigh)
-                opts.sendToPrintUtility = False
-                opts.isBinaryFormat = True
-                mgr.execute(opts)
-                note = _verify_export(out, body_proxy)
-                exported += 1
-                log.append(f"OK    {stl_rel}"
-                           + (f"  [{note}]" if note else ""))
-            except Exception as ex:                                  # noqa: BLE001
-                errors.append(f"{stl_rel}: {ex}")
-                log.append(f"FAIL  {stl_rel}: {ex}")
-    finally:
-        _restore_visibility(state)
+    for stl_rel, body_proxy in resolved.items():
+        out = (stl_rel if os.path.isabs(stl_rel)
+               else os.path.join(folder, stl_rel))
         try:
-            with open(os.path.join(folder, EXPORT_LOG_FILENAME), "a",
-                      encoding="utf-8") as f:
-                f.write("\n".join(log) + "\n\n")
-        except OSError:
-            pass
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            occ_path = stored_map.get(stl_rel, ("", ""))[0]
+            chain = _resolve_chain(root, occ_path) or []
+            note = _export_body(out, body_proxy, chain)
+            exported += 1
+            log.append(f"OK    {stl_rel}" + (f"  [{note}]" if note else ""))
+        except Exception as ex:                                      # noqa: BLE001
+            errors.append(f"{stl_rel}: {ex}")
+            log.append(f"FAIL  {stl_rel}: {ex}")
+    try:
+        with open(os.path.join(folder, EXPORT_LOG_FILENAME), "a",
+                  encoding="utf-8") as f:
+            f.write("\n".join(log) + "\n\n")
+    except OSError:
+        pass
     return exported, errors
 
 
@@ -439,42 +364,67 @@ def _bbox_mm(bounding_box):
             (hi.x * 10.0, hi.y * 10.0, hi.z * 10.0))
 
 
-def _verify_export(path, body_proxy):
-    """Check the written STL's bounding box against the body's world
-    bounding box (proxy geometry queries return root-context coordinates).
+def _export_body(out_path, body_proxy, chain):
+    """Tessellate `body_proxy`, place the mesh in the assembly frame, and
+    write the binary STL in mm.
 
-    Fusion's API STL writer emits internal units (cm) — there is no unit
-    option like the manual dialog has — so a mesh that matches the world
-    box at 10x scale is rescaled to mm in place.  A mesh matching the
-    body-LOCAL box means the occurrence transform was not applied.
+    Placement is chosen by verification: the tessellation is tried
+    as-returned and under the composed occurrence-chain transforms, and
+    the first candidate whose bounding box matches the body proxy's
+    assembly-world bounding box wins.  Whatever coordinate convention this
+    Fusion version's MeshCalculator / transform2 actually follows, the
+    written file provably lands where the body sits in the assembly.
 
-    Returns a short note for the log ('' or 'rescaled cm → mm'), raises
-    on anything unfixable.
+    Returns a short placement note for the log.
     """
-    if not os.path.isfile(path):
-        raise RuntimeError("export wrote no file")
-    lo, hi, _ntri = stl_check.read_binary_stl_bbox(path)
-    file_box = (lo, hi)
+    calc = body_proxy.meshManager.createMeshCalculator()
+    calc.setQuality(
+        adsk.fusion.TriangleMeshQualityOptions.HighQualityTriangleMesh)
+    mesh = calc.calculate()
+    if mesh is None:
+        raise RuntimeError("tessellation failed")
+    coords_cm = list(mesh.nodeCoordinatesAsDouble)
+    indices = list(mesh.nodeIndices)
+    if not indices:
+        raise RuntimeError("tessellation produced no triangles")
 
     world_box = _bbox_mm(body_proxy.boundingBox)
-    native = (body_proxy.nativeObject
-              if body_proxy.assemblyContext is not None else body_proxy)
-    local_box = _bbox_mm(native.boundingBox)
+    diag = sum((world_box[1][i] - world_box[0][i]) ** 2
+               for i in range(3)) ** 0.5
+    tol = max(1.0, 0.02 * diag)
 
-    status = stl_check.diagnose_frame(file_box, world_box, local_box)
-    if status == "ok":
-        return ""
-    if status == "cm":
-        stl_check.scale_binary_stl(path, 10.0)
-        return "rescaled cm → mm"
-    if status in ("local", "local_cm"):
-        raise RuntimeError(
-            "mesh is in body-local coordinates — the occurrence transform "
-            "was not applied"
-            + (" (and units are cm)" if status == "local_cm" else "")
-            + f": file spans {lo}..{hi}, body sits at "
-            f"{world_box[0]}..{world_box[1]} mm in the assembly")
+    tried = []
+    for label, m in _placement_candidates(chain):
+        pts_cm = (coords_cm if m is None
+                  else stl_check.transform_points(m, coords_cm))
+        lo, hi = stl_check.bbox_of_points(pts_cm)
+        box_mm = (tuple(c * 10.0 for c in lo), tuple(c * 10.0 for c in hi))
+        if stl_check.boxes_match(box_mm, world_box, tol):
+            stl_check.write_binary_stl(out_path, pts_cm, indices, scale=10.0)
+            return "" if label == "as-returned" else label
+        tried.append((label, box_mm))
     raise RuntimeError(
-        f"bounding-box mismatch: file spans {lo}..{hi} (raw units), "
-        f"expected world {world_box[0]}..{world_box[1]} mm, "
-        f"body-local {local_box[0]}..{local_box[1]} mm")
+        "could not place mesh in the assembly frame: body world box "
+        f"{world_box[0]}..{world_box[1]} mm; candidates: "
+        + "; ".join(f"{lbl} → {b[0]}..{b[1]}" for lbl, b in tried))
+
+
+def _placement_candidates(chain):
+    """Yield (label, matrix-or-None) placements to try, in order.
+
+    'as-returned' covers a MeshCalculator that already returns root-context
+    coordinates (proxy behaviour).  The transform candidates cover a
+    calculator that returns component-local coordinates: occurrence
+    transforms compose parent→child down the chain (transform2 is
+    parent-relative), and the raw leaf transform is tried last in case
+    this Fusion version bakes the full context into proxy transforms."""
+    yield ("as-returned", None)
+    if chain:
+        composed = list(stl_check.MAT4_IDENTITY)
+        for occ in chain:
+            native = getattr(occ, "nativeObject", None) or occ
+            composed = stl_check.mat4_multiply(
+                composed, list(native.transform2.asArray()))
+        yield ("chain transform", composed)
+        if len(chain) > 1:
+            yield ("leaf transform", list(chain[-1].transform2.asArray()))
