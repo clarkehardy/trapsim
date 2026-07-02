@@ -14,10 +14,15 @@ Flow (all in one shot):
      with .assemblyContext set to the specific Occurrence clicked, so
      ':1' and ':2' copies are naturally distinguished).
   5. Write fusion_map.yaml.
-  6. Export each mapped body via Design.exportManager.createSTLExportOptions
-     using the body PROXY (not the raw body) so the occurrence transform is
-     applied automatically — same effect as the manual "isolate + save from
-     top-level" workflow.
+  6. For each mapped body, programmatically reproduce the manual export
+     recipe: hide every occurrence and body (what Isolate does), show only
+     the target body and its occurrence chain, then export the TOP-LEVEL
+     assembly via Design.exportManager.  Exporting from the top level is
+     what bakes the occurrence transforms in — exporting the body (even its
+     proxy) directly writes body-LOCAL coordinates and stacks every part at
+     the origin.  Visibility state is restored afterwards.
+  7. Verify each written STL: its bounding box must match the body's
+     assembly-world bounding box, so a wrong-frame export fails loudly.
 
 The script has no state between runs beyond fusion_map.yaml + a
 last-used-folder preference stored in Fusion's user prefs.
@@ -34,6 +39,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import stl_check    # noqa: E402  (bundled next to this file)
 import yaml_subset  # noqa: E402  (bundled next to this file)
 
 
@@ -125,13 +131,15 @@ def run(_context):
         r = ui.messageBox(
             f"Ready to export {len(resolved)} of {len(targets)} STL files.\n"
             f"Destination: {folder}\n\n"
+            "Each body is temporarily isolated during its export "
+            "(visibility is restored afterwards).  "
             "Existing files will be overwritten.  Proceed?",
             "Export",
             adsk.core.MessageBoxButtonTypes.YesNoButtonType)
         if r != adsk.core.DialogResults.DialogYes:
             return
 
-        exported, errors = _export_all(design, folder, resolved)
+        exported, errors = _export_all(design, folder, resolved, stored_map)
 
         msg = f"Exported {exported} of {len(resolved)} STL files."
         if errors:
@@ -244,14 +252,14 @@ def _resolve_all(root_component, targets, stored_map):
     return resolved, unmapped, stale
 
 
-def _resolve_body(root_component, occurrence_path, body_name):
+def _resolve_chain(root_component, occurrence_path):
     """Walk `occurrence_path` (Fusion's `+`-separated fullPathName) from the
-    root component and return the named body proxy, or None if missing."""
+    root component.  Returns the list of occurrences root→leaf ([] for a
+    root-level body), or None if any path segment is missing."""
+    chain = []
     if occurrence_path:
-        parts = occurrence_path.split("+")
         container = root_component.occurrences
-        occurrence = None
-        for part in parts:
+        for part in occurrence_path.split("+"):
             found = None
             for i in range(container.count):
                 o = container.item(i)
@@ -260,11 +268,17 @@ def _resolve_body(root_component, occurrence_path, body_name):
                     break
             if found is None:
                 return None
-            occurrence = found
-            container = occurrence.childOccurrences
-        bodies = occurrence.bRepBodies
-    else:
-        bodies = root_component.bRepBodies
+            chain.append(found)
+            container = found.childOccurrences
+    return chain
+
+
+def _resolve_body(root_component, occurrence_path, body_name):
+    """Return the named body proxy at `occurrence_path`, or None if missing."""
+    chain = _resolve_chain(root_component, occurrence_path)
+    if chain is None:
+        return None
+    bodies = chain[-1].bRepBodies if chain else root_component.bRepBodies
     for i in range(bodies.count):
         b = bodies.item(i)
         if b.name == body_name:
@@ -294,23 +308,120 @@ def _prompt_pick(ui, category, entity_name, stl_path):
     return (occ_path, body.name)
 
 
+# ── Visibility bookkeeping ────────────────────────────────────────────────────
+# Body light bulbs are a property of the NATIVE body: hiding "Body1" of a
+# component hides it in every occurrence of that component.  So isolating one
+# copy of a 4×-instanced rod means: show the native body, show the occurrence
+# chain leading to the wanted copy, and keep the sibling copies' occurrences
+# hidden.  Occurrence bulbs are per-occurrence, which is what makes this work.
+
+def _record_visibility(design):
+    root = design.rootComponent
+    occ_states, folder_states, body_states = [], [], []
+    occs = root.allOccurrences
+    for i in range(occs.count):
+        o = occs.item(i)
+        occ_states.append((o, o.isLightBulbOn))
+    comps = design.allComponents
+    for i in range(comps.count):
+        c = comps.item(i)
+        folder_states.append((c, c.isBodiesFolderLightBulbOn))
+        bodies = c.bRepBodies
+        for j in range(bodies.count):
+            b = bodies.item(j)
+            body_states.append((b, b.isLightBulbOn))
+    return occ_states, folder_states, body_states
+
+
+def _restore_visibility(state):
+    occ_states, folder_states, body_states = state
+    for o, on in occ_states:
+        try:
+            o.isLightBulbOn = on
+        except Exception:                                            # noqa: BLE001
+            pass
+    for c, on in folder_states:
+        try:
+            c.isBodiesFolderLightBulbOn = on
+        except Exception:                                            # noqa: BLE001
+            pass
+    for b, on in body_states:
+        try:
+            b.isLightBulbOn = on
+        except Exception:                                            # noqa: BLE001
+            pass
+
+
+def _isolate(design, chain, body_proxy):
+    """Reproduce the manual Isolate: hide every occurrence and body, then
+    show only `body_proxy` and the occurrence chain leading to it."""
+    root = design.rootComponent
+    occs = root.allOccurrences
+    for i in range(occs.count):
+        occs.item(i).isLightBulbOn = False
+    comps = design.allComponents
+    for i in range(comps.count):
+        bodies = comps.item(i).bRepBodies
+        for j in range(bodies.count):
+            bodies.item(j).isLightBulbOn = False
+    for occ in chain:
+        occ.isLightBulbOn = True
+    body_proxy.parentComponent.isBodiesFolderLightBulbOn = True
+    body_proxy.isLightBulbOn = True
+
+
 # ── STL export ────────────────────────────────────────────────────────────────
 
-def _export_all(design, folder, resolved):
+def _export_all(design, folder, resolved, stored_map):
+    """Export each mapped body by isolating it and exporting the top-level
+    assembly — the only path through Fusion's export pipeline that applies
+    occurrence transforms, i.e. produces assembly-world coordinates."""
     exported = 0
     errors = []
     mgr = design.exportManager
-    for stl_rel, body_proxy in resolved.items():
-        out = stl_rel if os.path.isabs(stl_rel) else os.path.join(folder, stl_rel)
-        try:
-            os.makedirs(os.path.dirname(out), exist_ok=True)
-            opts = mgr.createSTLExportOptions(body_proxy, out)
-            opts.meshRefinement = (
-                adsk.fusion.MeshRefinementSettings.MeshRefinementHigh)
-            opts.sendToPrintUtility = False
-            opts.isBinaryFormat = True
-            mgr.execute(opts)
-            exported += 1
-        except Exception as ex:                                      # noqa: BLE001
-            errors.append(f"{stl_rel}: {ex}")
+    root = design.rootComponent
+    state = _record_visibility(design)
+    try:
+        for stl_rel, body_proxy in resolved.items():
+            out = (stl_rel if os.path.isabs(stl_rel)
+                   else os.path.join(folder, stl_rel))
+            try:
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                occ_path = stored_map.get(stl_rel, ("", ""))[0]
+                chain = _resolve_chain(root, occ_path) or []
+                _isolate(design, chain, body_proxy)
+                adsk.doEvents()
+                opts = mgr.createSTLExportOptions(root, out)
+                opts.meshRefinement = (
+                    adsk.fusion.MeshRefinementSettings.MeshRefinementHigh)
+                opts.sendToPrintUtility = False
+                opts.isBinaryFormat = True
+                mgr.execute(opts)
+                _verify_export(out, body_proxy)
+                exported += 1
+            except Exception as ex:                                  # noqa: BLE001
+                errors.append(f"{stl_rel}: {ex}")
+    finally:
+        _restore_visibility(state)
     return exported, errors
+
+
+def _verify_export(path, body_proxy):
+    """Check the written STL's bounding box against the body's world
+    bounding box (proxy geometry queries return root-context coordinates).
+    Catches wrong-frame, wrong-unit, wrong-body, and empty exports."""
+    if not os.path.isfile(path):
+        raise RuntimeError("export wrote no file")
+    lo, hi, _ntri = stl_check.read_binary_stl_bbox(path)
+
+    bb = body_proxy.boundingBox                     # cm, root context
+    exp_lo = (bb.minPoint.x * 10.0, bb.minPoint.y * 10.0, bb.minPoint.z * 10.0)
+    exp_hi = (bb.maxPoint.x * 10.0, bb.maxPoint.y * 10.0, bb.maxPoint.z * 10.0)
+
+    diag = sum((exp_hi[i] - exp_lo[i]) ** 2 for i in range(3)) ** 0.5
+    center_tol = max(1.0, 0.02 * diag)              # mm
+    if not stl_check.boxes_match((lo, hi), (exp_lo, exp_hi), center_tol):
+        raise RuntimeError(
+            f"bounding-box mismatch: file spans {lo}..{hi} mm but the body "
+            f"sits at {exp_lo}..{exp_hi} mm in the assembly — the mesh was "
+            "exported in the wrong coordinate frame")

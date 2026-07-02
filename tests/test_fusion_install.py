@@ -26,6 +26,8 @@ class TestInstall:
         assert (target / "FusionExportSTL.py").is_file()
         assert (target / "FusionExportSTL.manifest").is_file()
         assert (target / "yaml_subset.py").is_file()
+        assert (target / "stl_check.py").is_file()
+        assert not (target / "__pycache__").exists()
 
     def test_reinstall_without_force_raises(self, tmp_path):
         trapsim_fusion.install(dest=tmp_path)

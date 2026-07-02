@@ -254,7 +254,7 @@ Then in Fusion 360:
 4. First run only: for each STL listed in `geometry.yaml`, the script asks you to click the corresponding body in the viewport. Fusion's pick returns the specific occurrence you clicked, so `part v1:1` vs `part v1:2` are naturally distinguished. The mapping is written to `<simulation-folder>/fusion_map.yaml`.
 5. Every subsequent run reads the map and re-exports without prompting. If a mapping breaks (occurrence renamed or deleted) the script re-prompts only for that STL.
 
-Bodies are exported using their occurrence proxies, so STLs come out in assembly-world millimetres — the same coordinate frame `geometry.yaml`'s `bounds_mm` uses. No mesh-quality knobs are exposed; the script uses `MeshRefinementHigh` and binary STL, matching the manual recipe above.
+For each STL the script programmatically reproduces the manual recipe: it temporarily isolates the target body (hides every other occurrence and body), exports the **top-level assembly** as a mesh, then restores your visibility state. Exporting from the top level is what bakes the occurrence transforms in, so STLs come out in assembly-world millimetres — the same coordinate frame `geometry.yaml`'s `bounds_mm` uses. After each write the file's bounding box is checked against the body's assembly-world bounding box, so a wrong-frame (or wrong-unit, or wrong-body) export fails loudly instead of silently corrupting the simulation geometry. No mesh-quality knobs are exposed; the script uses `MeshRefinementHigh` and binary STL, matching the manual recipe above.
 
 ### SolidWorks
 
