@@ -28,6 +28,7 @@ The script has no state between runs beyond fusion_map.yaml + a
 last-used-folder preference stored in Fusion's user prefs.
 """
 
+import importlib
 import os
 import sys
 import time
@@ -42,6 +43,13 @@ if _HERE not in sys.path:
 
 import stl_check    # noqa: E402  (bundled next to this file)
 import yaml_subset  # noqa: E402  (bundled next to this file)
+
+# Fusion keeps its embedded interpreter alive between script runs, so a
+# previously imported copy of the bundled helpers would shadow an updated
+# install (the main script is reloaded each run, its imports are not).
+# Reload them every run so they always match what's on disk.
+stl_check = importlib.reload(stl_check)
+yaml_subset = importlib.reload(yaml_subset)
 
 
 GEOMETRY_FILENAME   = "geometry.yaml"
