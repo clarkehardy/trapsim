@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "script",
+    "author": "Clarke Hardy",
+    "description": {
+        "": "Export bodies to STL for trapsim.  Reads geometry.yaml from a simulation folder, remembers Fusion-body ↔ STL mappings in fusion_map.yaml, and writes one binary STL per body in assembly-world millimetres."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

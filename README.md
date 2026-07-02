@@ -227,13 +227,34 @@ Each rigid body that you want as an independent voltage source, dielectric, or d
 
 The simulation volume (`grid.bounds_mm`) must enclose every body. The grid spacing (`grid.dx_mm`) sets the accuracy/memory tradeoff — at 0.5 mm a 130×90×850 grid uses ~80 MB per electrode.
 
-### Autodesk Fusion
+### Autodesk Fusion — manual
 
 1. In the canvas, right-click the component → **Find in Browser**.
 2. Expand to the **Body**, right-click → **Isolate**.
 3. Right-click the top-level assembly → **Save As Mesh**.
 4. **Format:** STL (Binary), **Unit Type:** Millimeter, **Structure:** One File, **Refinement:** High.
 5. Save to `stl/<body_name>.stl`.
+
+### Autodesk Fusion — automated (FusionExportSTL)
+
+Ships as a one-shot Fusion 360 script that reads `geometry.yaml`, remembers which Fusion body maps to which STL path in a `fusion_map.yaml` sidecar, and re-exports every body to its target path in one click. Install once:
+
+```
+python -m trapsim.fusion install     # or install --force / --symlink
+python -m trapsim.fusion status
+```
+
+That copies the script into Fusion's Scripts folder (macOS: `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/Scripts/FusionExportSTL/`; Windows: `%APPDATA%\Autodesk\Autodesk Fusion 360\API\Scripts\FusionExportSTL\`).
+
+Then in Fusion 360:
+
+1. Open your design.
+2. Press `Shift+S` → **My Scripts** → **FusionExportSTL** → **Run**.
+3. Pick your simulation folder (the one containing `geometry.yaml`).
+4. First run only: for each STL listed in `geometry.yaml`, the script asks you to click the corresponding body in the viewport. Fusion's pick returns the specific occurrence you clicked, so `part v1:1` vs `part v1:2` are naturally distinguished. The mapping is written to `<simulation-folder>/fusion_map.yaml`.
+5. Every subsequent run reads the map and re-exports without prompting. If a mapping breaks (occurrence renamed or deleted) the script re-prompts only for that STL.
+
+Bodies are exported using their occurrence proxies, so STLs come out in assembly-world millimetres — the same coordinate frame `geometry.yaml`'s `bounds_mm` uses. No mesh-quality knobs are exposed; the script uses `MeshRefinementHigh` and binary STL, matching the manual recipe above.
 
 ### SolidWorks
 
@@ -346,6 +367,8 @@ Built-in classes (in `trapsim.physics`):
 | `python -m trapsim.viz.animate` | | 2-D matplotlib animation |
 | `python -m trapsim.viz.visualize` | | 3-D PyVista viewer (with flythrough) |
 | `python -m trapsim.viz.plot_field` | | 2-D field cross-section |
+| `python -m trapsim.capacitance` | | Maxwell capacitance matrix from `field.pa*` |
+| `python -m trapsim.fusion install` | | Install the FusionExportSTL script into Fusion 360 (see [Exporting STL files from CAD](#exporting-stl-files-from-cad)) |
 
 All commands default to `./geometry.yaml`, `./experiment.py`, and write PA / trajectory / schedule files in the current directory. Pass `--help` on any of them for the full flag list.
 

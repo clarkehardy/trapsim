@@ -34,7 +34,7 @@ dev    = ["pytest>=8", "pytest-cov"]
 
 [project.scripts]
 trapsim = "trapsim.run:main"
-# `python -m trapsim.{refine,fly,capacitance,viz.animate,viz.visualize,viz.plot_field}` also work.
+# `python -m trapsim.{refine,fly,capacitance,fusion,viz.animate,viz.visualize,viz.plot_field}` also work.
 
 [project.urls]
 Source = "https://github.com/clarkehardy/trapsim"
@@ -44,7 +44,7 @@ Issues = "https://github.com/clarkehardy/trapsim/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-trapsim = ["_solver/laplace.cpp"]
+trapsim = ["_solver/laplace.cpp", "fusion/_script/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
