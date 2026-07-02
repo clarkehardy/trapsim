@@ -30,6 +30,7 @@ last-used-folder preference stored in Fusion's user prefs.
 
 import os
 import sys
+import time
 import traceback
 
 import adsk.core
@@ -43,9 +44,10 @@ import stl_check    # noqa: E402  (bundled next to this file)
 import yaml_subset  # noqa: E402  (bundled next to this file)
 
 
-GEOMETRY_FILENAME  = "geometry.yaml"
-STL_MAP_FILENAME   = "fusion_map.yaml"
-LAST_FOLDER_ATTR   = "trapsim_last_folder"
+GEOMETRY_FILENAME   = "geometry.yaml"
+STL_MAP_FILENAME    = "fusion_map.yaml"
+EXPORT_LOG_FILENAME = "fusion_export_log.txt"
+LAST_FOLDER_ATTR    = "trapsim_last_folder"
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -144,6 +146,7 @@ def run(_context):
         msg = f"Exported {exported} of {len(resolved)} STL files."
         if errors:
             msg += "\n\nErrors:\n" + "\n".join(f"  {e}" for e in errors)
+        msg += f"\n\nFull report: {os.path.join(folder, EXPORT_LOG_FILENAME)}"
         ui.messageBox(msg, "Export complete")
 
     except Exception:                                               # noqa: BLE001
@@ -189,7 +192,7 @@ def _set_last_folder(app, folder):
 # ── geometry.yaml → target list ───────────────────────────────────────────────
 
 def _load_targets(folder):
-    with open(os.path.join(folder, GEOMETRY_FILENAME)) as f:
+    with open(os.path.join(folder, GEOMETRY_FILENAME), encoding="utf-8") as f:
         raw = yaml_subset.parse(f.read()) or {}
     targets = []
     for e in raw.get("electrodes") or []:
@@ -213,7 +216,7 @@ def _load_map(folder):
     path = os.path.join(folder, STL_MAP_FILENAME)
     if not os.path.isfile(path):
         return {}, None
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml_subset.parse(f.read()) or {}
     design_name = raw.get("fusion_design_name")
     mp = {}
@@ -227,7 +230,8 @@ def _load_map(folder):
 def _save_map(folder, design_name, mp):
     mappings = [{"stl": stl, "occurrence": occ, "body": body}
                 for stl, (occ, body) in mp.items()]
-    with open(os.path.join(folder, STL_MAP_FILENAME), "w") as f:
+    with open(os.path.join(folder, STL_MAP_FILENAME), "w",
+              encoding="utf-8") as f:
         f.write(yaml_subset.dump_mapping_file(design_name, mappings))
 
 
@@ -375,9 +379,13 @@ def _isolate(design, chain, body_proxy):
 def _export_all(design, folder, resolved, stored_map):
     """Export each mapped body by isolating it and exporting the top-level
     assembly — the only path through Fusion's export pipeline that applies
-    occurrence transforms, i.e. produces assembly-world coordinates."""
+    occurrence transforms, i.e. produces assembly-world coordinates.
+
+    Writes a per-run report to fusion_export_log.txt in the simulation
+    folder so results survive the summary dialog being dismissed."""
     exported = 0
     errors = []
+    log = [time.strftime("FusionExportSTL run  %Y-%m-%d %H:%M:%S")]
     mgr = design.exportManager
     root = design.rootComponent
     state = _record_visibility(design)
@@ -397,31 +405,68 @@ def _export_all(design, folder, resolved, stored_map):
                 opts.sendToPrintUtility = False
                 opts.isBinaryFormat = True
                 mgr.execute(opts)
-                _verify_export(out, body_proxy)
+                note = _verify_export(out, body_proxy)
                 exported += 1
+                log.append(f"OK    {stl_rel}"
+                           + (f"  [{note}]" if note else ""))
             except Exception as ex:                                  # noqa: BLE001
                 errors.append(f"{stl_rel}: {ex}")
+                log.append(f"FAIL  {stl_rel}: {ex}")
     finally:
         _restore_visibility(state)
+        try:
+            with open(os.path.join(folder, EXPORT_LOG_FILENAME), "a",
+                      encoding="utf-8") as f:
+                f.write("\n".join(log) + "\n\n")
+        except OSError:
+            pass
     return exported, errors
+
+
+def _bbox_mm(bounding_box):
+    """Fusion BoundingBox3D (internal cm) → ((min3), (max3)) in mm."""
+    lo = bounding_box.minPoint
+    hi = bounding_box.maxPoint
+    return ((lo.x * 10.0, lo.y * 10.0, lo.z * 10.0),
+            (hi.x * 10.0, hi.y * 10.0, hi.z * 10.0))
 
 
 def _verify_export(path, body_proxy):
     """Check the written STL's bounding box against the body's world
     bounding box (proxy geometry queries return root-context coordinates).
-    Catches wrong-frame, wrong-unit, wrong-body, and empty exports."""
+
+    Fusion's API STL writer emits internal units (cm) — there is no unit
+    option like the manual dialog has — so a mesh that matches the world
+    box at 10x scale is rescaled to mm in place.  A mesh matching the
+    body-LOCAL box means the occurrence transform was not applied.
+
+    Returns a short note for the log ('' or 'rescaled cm → mm'), raises
+    on anything unfixable.
+    """
     if not os.path.isfile(path):
         raise RuntimeError("export wrote no file")
     lo, hi, _ntri = stl_check.read_binary_stl_bbox(path)
+    file_box = (lo, hi)
 
-    bb = body_proxy.boundingBox                     # cm, root context
-    exp_lo = (bb.minPoint.x * 10.0, bb.minPoint.y * 10.0, bb.minPoint.z * 10.0)
-    exp_hi = (bb.maxPoint.x * 10.0, bb.maxPoint.y * 10.0, bb.maxPoint.z * 10.0)
+    world_box = _bbox_mm(body_proxy.boundingBox)
+    native = (body_proxy.nativeObject
+              if body_proxy.assemblyContext is not None else body_proxy)
+    local_box = _bbox_mm(native.boundingBox)
 
-    diag = sum((exp_hi[i] - exp_lo[i]) ** 2 for i in range(3)) ** 0.5
-    center_tol = max(1.0, 0.02 * diag)              # mm
-    if not stl_check.boxes_match((lo, hi), (exp_lo, exp_hi), center_tol):
+    status = stl_check.diagnose_frame(file_box, world_box, local_box)
+    if status == "ok":
+        return ""
+    if status == "cm":
+        stl_check.scale_binary_stl(path, 10.0)
+        return "rescaled cm → mm"
+    if status in ("local", "local_cm"):
         raise RuntimeError(
-            f"bounding-box mismatch: file spans {lo}..{hi} mm but the body "
-            f"sits at {exp_lo}..{exp_hi} mm in the assembly — the mesh was "
-            "exported in the wrong coordinate frame")
+            "mesh is in body-local coordinates — the occurrence transform "
+            "was not applied"
+            + (" (and units are cm)" if status == "local_cm" else "")
+            + f": file spans {lo}..{hi}, body sits at "
+            f"{world_box[0]}..{world_box[1]} mm in the assembly")
+    raise RuntimeError(
+        f"bounding-box mismatch: file spans {lo}..{hi} (raw units), "
+        f"expected world {world_box[0]}..{world_box[1]} mm, "
+        f"body-local {local_box[0]}..{local_box[1]} mm")

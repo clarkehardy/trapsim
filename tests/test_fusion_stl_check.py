@@ -85,6 +85,65 @@ class TestReadBBox:
             sc.read_binary_stl_bbox(p)
 
 
+# ── scale_binary_stl ──────────────────────────────────────────────────────────
+
+class TestScaleBinarySTL:
+    def test_scales_vertices_not_normals(self, sc, tmp_path):
+        p = tmp_path / "s.stl"
+        _write_stl(p, [((1, 2, 3), (4, 5, 6), (7, 8, 9))])
+        sc.scale_binary_stl(p, 10.0)
+        lo, hi, n = sc.read_binary_stl_bbox(p)
+        assert n == 1
+        assert lo == pytest.approx((10.0, 20.0, 30.0))
+        assert hi == pytest.approx((70.0, 80.0, 90.0))
+        # normal (0, 0, 1) untouched
+        raw = p.read_bytes()
+        assert struct.unpack_from("<3f", raw, 84) == pytest.approx((0.0, 0.0, 1.0))
+
+    def test_truncated_rejected(self, sc, tmp_path):
+        p = tmp_path / "t.stl"
+        _write_stl(p, [((0, 0, 0), (1, 0, 0), (0, 1, 0))])
+        p.write_bytes(p.read_bytes()[:-10])
+        with pytest.raises(ValueError, match="truncated"):
+            sc.scale_binary_stl(p, 10.0)
+
+
+# ── diagnose_frame ────────────────────────────────────────────────────────────
+
+class TestDiagnoseFrame:
+    # a 10×20×300 mm rod sitting at x ∈ [100, 110] in the assembly,
+    # but at the origin in its own component frame
+    WORLD = ((100.0, 0.0, 0.0), (110.0, 20.0, 300.0))
+    LOCAL = ((0.0, -10.0, -150.0), (10.0, 10.0, 150.0))
+
+    @staticmethod
+    def _scaled(box, s):
+        return (tuple(c * s for c in box[0]), tuple(c * s for c in box[1]))
+
+    def test_world_mm_is_ok(self, sc):
+        assert sc.diagnose_frame(self.WORLD, self.WORLD, self.LOCAL) == "ok"
+
+    def test_world_cm_detected(self, sc):
+        file_box = self._scaled(self.WORLD, 0.1)
+        assert sc.diagnose_frame(file_box, self.WORLD, self.LOCAL) == "cm"
+
+    def test_local_mm_detected(self, sc):
+        assert sc.diagnose_frame(self.LOCAL, self.WORLD, self.LOCAL) == "local"
+
+    def test_local_cm_detected(self, sc):
+        file_box = self._scaled(self.LOCAL, 0.1)
+        assert sc.diagnose_frame(file_box, self.WORLD, self.LOCAL) == "local_cm"
+
+    def test_garbage_is_unknown(self, sc):
+        junk = ((-500.0, -500.0, -500.0), (500.0, 500.0, 500.0))
+        assert sc.diagnose_frame(junk, self.WORLD, self.LOCAL) == "unknown"
+
+    def test_body_at_origin_prefers_ok(self, sc):
+        # world == local (unrotated body at origin): 'ok' wins by precedence
+        box = ((0.0, 0.0, 0.0), (10.0, 10.0, 10.0))
+        assert sc.diagnose_frame(box, box, box) == "ok"
+
+
 # ── boxes_match ───────────────────────────────────────────────────────────────
 
 class TestBoxesMatch:
