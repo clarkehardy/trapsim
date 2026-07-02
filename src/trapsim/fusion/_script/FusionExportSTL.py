@@ -14,18 +14,21 @@ Flow (all in one shot):
      with .assemblyContext set to the specific Occurrence clicked, so
      ':1' and ':2' copies are naturally distinguished).
   5. Write fusion_map.yaml.
-  6. For each mapped body, tessellate it in-process (MeshCalculator — the
-     same tessellator the export dialog uses) and write the binary STL
-     directly.  Fusion's exportManager is NOT used: empirically its STL
-     writer emits body-LOCAL coordinates no matter what it is handed
-     (body, proxy, or isolated top-level component), silently discarding
-     occurrence transforms.
-  7. The assembly-world placement is chosen by verification, not trust:
-     the mesh is tried as-returned and under the composed occurrence-chain
-     transforms, and the candidate whose bounding box matches the body
-     proxy's world bounding box (a reliable proxy query) is written.  If
-     no candidate matches, nothing is written and the error reports every
-     candidate box.
+  6. Copy each mapped body into a throwaway direct-design document at its
+     assembly-world position and export it there with Fusion's STANDARD
+     STL writer (high refinement, binary).  TemporaryBRepManager.copy of a
+     body PROXY bakes the occurrence transform into the copy — Autodesk's
+     recommended workaround for the known ExportManager limitation that
+     its STL writer emits body-local coordinates for anything living under
+     an occurrence, and the same technique the ExportIt add-in uses.  The
+     user's design is never modified; the temp document is closed unsaved.
+  7. Every placement is verified twice.  Before export: the copied body's
+     bounding box must match the proxy's world bounding box (like-for-like
+     BRep boxes; if the plain copy is misplaced, composed occurrence-chain
+     transforms are tried as fallbacks).  After export: the written file's
+     mesh bounding box must sit at the world box — centre agreement plus
+     containment, because Fusion BRep boxes are loose for curved faces and
+     extent equality would false-fail e.g. 45°-rotated cylindrical rods.
 
 The script has no state between runs beyond fusion_map.yaml + a
 last-used-folder preference stored in Fusion's user prefs.
@@ -325,8 +328,8 @@ def _prompt_pick(ui, category, entity_name, stl_path):
 # ── STL export ────────────────────────────────────────────────────────────────
 
 def _export_all(design, folder, resolved, stored_map):
-    """Tessellate each mapped body in-process and write its STL directly,
-    placing the triangles in assembly-world coordinates (see _export_body).
+    """Export each mapped body through a throwaway direct-design document
+    (see module docstring, steps 6-7).  The user's design is not modified.
 
     Writes a per-run report to fusion_export_log.txt in the simulation
     folder so results survive the summary dialog being dismissed."""
@@ -334,26 +337,51 @@ def _export_all(design, folder, resolved, stored_map):
     errors = []
     log = [time.strftime("FusionExportSTL run  %Y-%m-%d %H:%M:%S")]
     root = design.rootComponent
-    for stl_rel, body_proxy in resolved.items():
-        out = (stl_rel if os.path.isabs(stl_rel)
-               else os.path.join(folder, stl_rel))
-        try:
-            os.makedirs(os.path.dirname(out), exist_ok=True)
-            occ_path = stored_map.get(stl_rel, ("", ""))[0]
-            chain = _resolve_chain(root, occ_path) or []
-            note = _export_body(out, body_proxy, chain)
-            exported += 1
-            log.append(f"OK    {stl_rel}" + (f"  [{note}]" if note else ""))
-        except Exception as ex:                                      # noqa: BLE001
-            errors.append(f"{stl_rel}: {ex}")
-            log.append(f"FAIL  {stl_rel}: {ex}")
+    app = adsk.core.Application.get()
+    temp_doc = None
     try:
-        with open(os.path.join(folder, EXPORT_LOG_FILENAME), "a",
-                  encoding="utf-8") as f:
-            f.write("\n".join(log) + "\n\n")
-    except OSError:
-        pass
+        temp_doc, temp_root, temp_mgr = _create_temp_document(app)
+        for stl_rel, body_proxy in resolved.items():
+            out = (stl_rel if os.path.isabs(stl_rel)
+                   else os.path.join(folder, stl_rel))
+            try:
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                occ_path = stored_map.get(stl_rel, ("", ""))[0]
+                chain = _resolve_chain(root, occ_path) or []
+                note = _export_via_temp_doc(
+                    temp_root, temp_mgr, out, body_proxy, chain)
+                exported += 1
+                log.append(f"OK    {stl_rel}"
+                           + (f"  [{note}]" if note else ""))
+            except Exception as ex:                                  # noqa: BLE001
+                errors.append(f"{stl_rel}: {ex}")
+                log.append(f"FAIL  {stl_rel}: {ex}")
+    finally:
+        if temp_doc is not None:
+            try:
+                temp_doc.close(False)                # never save
+            except Exception:                                        # noqa: BLE001
+                pass
+        try:
+            with open(os.path.join(folder, EXPORT_LOG_FILENAME), "a",
+                      encoding="utf-8") as f:
+                f.write("\n".join(log) + "\n\n")
+        except OSError:
+            pass
     return exported, errors
+
+
+def _create_temp_document(app):
+    """Open a scratch direct-design document to export from.  Direct design
+    means bodies can be added without the baseFeature edit dance."""
+    doc = app.documents.add(
+        adsk.core.DocumentTypes.FusionDesignDocumentType)
+    design = adsk.fusion.Design.cast(
+        doc.products.itemByProductType("DesignProductType"))
+    design.designType = adsk.fusion.DesignTypes.DirectDesignType
+    design.fusionUnitsManager.distanceDisplayUnits = (
+        adsk.fusion.DistanceUnits.MillimeterDistanceUnits)
+    return doc, design.rootComponent, design.exportManager
 
 
 def _bbox_mm(bounding_box):
@@ -364,67 +392,95 @@ def _bbox_mm(bounding_box):
             (hi.x * 10.0, hi.y * 10.0, hi.z * 10.0))
 
 
-def _export_body(out_path, body_proxy, chain):
-    """Tessellate `body_proxy`, place the mesh in the assembly frame, and
-    write the binary STL in mm.
-
-    Placement is chosen by verification: the tessellation is tried
-    as-returned and under the composed occurrence-chain transforms, and
-    the first candidate whose bounding box matches the body proxy's
-    assembly-world bounding box wins.  Whatever coordinate convention this
-    Fusion version's MeshCalculator / transform2 actually follows, the
-    written file provably lands where the body sits in the assembly.
-
-    Returns a short placement note for the log.
-    """
-    calc = body_proxy.meshManager.createMeshCalculator()
-    calc.setQuality(
-        adsk.fusion.TriangleMeshQualityOptions.HighQualityTriangleMesh)
-    mesh = calc.calculate()
-    if mesh is None:
-        raise RuntimeError("tessellation failed")
-    coords_cm = list(mesh.nodeCoordinatesAsDouble)
-    indices = list(mesh.nodeIndices)
-    if not indices:
-        raise RuntimeError("tessellation produced no triangles")
-
+def _export_via_temp_doc(temp_root, temp_mgr, out_path, body_proxy, chain):
+    """Copy `body_proxy` at its assembly-world position into the temp
+    document, export it with Fusion's standard STL writer, verify, and
+    remove the copy.  Returns a short placement note for the log."""
+    brep_mgr = adsk.fusion.TemporaryBRepManager.get()
     world_box = _bbox_mm(body_proxy.boundingBox)
+
+    # 1. world-positioned temporary copy.  Copying a proxy is documented to
+    #    bake the occurrence transform; trust it only after checking its
+    #    BRep box against the proxy's (identical computation → tight match),
+    #    and fall back to explicit chain transforms if it is misplaced.
+    note = ""
+    copied = brep_mgr.copy(body_proxy)
+    if not _brep_boxes_close(_bbox_mm(copied.boundingBox), world_box):
+        native = (body_proxy.nativeObject
+                  if body_proxy.assemblyContext is not None else body_proxy)
+        copied = None
+        tried = []
+        for label, cells in _matrix_candidates(chain):
+            candidate = brep_mgr.copy(native)
+            matrix = adsk.core.Matrix3D.create()
+            matrix.setWithArray(list(cells))
+            brep_mgr.transform(candidate, matrix)
+            cand_box = _bbox_mm(candidate.boundingBox)
+            if _brep_boxes_close(cand_box, world_box):
+                copied = candidate
+                note = label
+                break
+            tried.append((label, cand_box))
+        if copied is None:
+            raise RuntimeError(
+                "could not place a copy of the body at its assembly "
+                f"position {world_box[0]}..{world_box[1]} mm; candidates: "
+                + "; ".join(f"{lbl} → {b[0]}..{b[1]}" for lbl, b in tried))
+
+    # 2. add to the temp document (root level, identity frame) and export
+    #    with the standard writer.
+    added = temp_root.bRepBodies.add(copied)
+    try:
+        opts = temp_mgr.createSTLExportOptions(added, out_path)
+        opts.meshRefinement = (
+            adsk.fusion.MeshRefinementSettings.MeshRefinementHigh)
+        opts.sendToPrintUtility = False
+        opts.isBinaryFormat = True
+        temp_mgr.execute(opts)
+    finally:
+        try:
+            added.deleteMe()
+        except Exception:                                            # noqa: BLE001
+            pass
+
+    # 3. verify the file: tight mesh box vs loose BRep box.
+    lo, hi, _ntri = stl_check.read_binary_stl_bbox(out_path)
     diag = sum((world_box[1][i] - world_box[0][i]) ** 2
                for i in range(3)) ** 0.5
-    tol = max(1.0, 0.02 * diag)
-
-    tried = []
-    for label, m in _placement_candidates(chain):
-        pts_cm = (coords_cm if m is None
-                  else stl_check.transform_points(m, coords_cm))
-        lo, hi = stl_check.bbox_of_points(pts_cm)
-        box_mm = (tuple(c * 10.0 for c in lo), tuple(c * 10.0 for c in hi))
-        if stl_check.boxes_match(box_mm, world_box, tol):
-            stl_check.write_binary_stl(out_path, pts_cm, indices, scale=10.0)
-            return "" if label == "as-returned" else label
-        tried.append((label, box_mm))
-    raise RuntimeError(
-        "could not place mesh in the assembly frame: body world box "
-        f"{world_box[0]}..{world_box[1]} mm; candidates: "
-        + "; ".join(f"{lbl} → {b[0]}..{b[1]}" for lbl, b in tried))
+    center_tol = max(1.0, 0.02 * diag)
+    if not stl_check.placement_plausible((lo, hi), world_box, center_tol):
+        raise RuntimeError(
+            f"exported file spans {lo}..{hi} mm but the body sits at "
+            f"{world_box[0]}..{world_box[1]} mm in the assembly")
+    return note
 
 
-def _placement_candidates(chain):
-    """Yield (label, matrix-or-None) placements to try, in order.
+def _brep_boxes_close(box_a, box_b, tol_mm=0.2):
+    """Two BRep bounding boxes of the same body under the same placement
+    are the same computation — compare per-component with a small slack."""
+    for lo_a, lo_b in zip(box_a[0], box_b[0]):
+        if abs(lo_a - lo_b) > tol_mm:
+            return False
+    for hi_a, hi_b in zip(box_a[1], box_b[1]):
+        if abs(hi_a - hi_b) > tol_mm:
+            return False
+    return True
 
-    'as-returned' covers a MeshCalculator that already returns root-context
-    coordinates (proxy behaviour).  The transform candidates cover a
-    calculator that returns component-local coordinates: occurrence
-    transforms compose parent→child down the chain (transform2 is
-    parent-relative), and the raw leaf transform is tried last in case
-    this Fusion version bakes the full context into proxy transforms."""
-    yield ("as-returned", None)
-    if chain:
-        composed = list(stl_check.MAT4_IDENTITY)
-        for occ in chain:
-            native = getattr(occ, "nativeObject", None) or occ
-            composed = stl_check.mat4_multiply(
-                composed, list(native.transform2.asArray()))
-        yield ("chain transform", composed)
-        if len(chain) > 1:
-            yield ("leaf transform", list(chain[-1].transform2.asArray()))
+
+def _matrix_candidates(chain):
+    """Yield (label, 16-float row-major matrix) world-placement candidates
+    for a body whose plain proxy copy came out misplaced.  transform2 is
+    parent-relative, so the chain product maps component-local to world;
+    the raw leaf transform is tried in case this Fusion version bakes the
+    full context into proxy transforms."""
+    if not chain:
+        yield ("identity", list(stl_check.MAT4_IDENTITY))
+        return
+    composed = list(stl_check.MAT4_IDENTITY)
+    for occ in chain:
+        native = getattr(occ, "nativeObject", None) or occ
+        composed = stl_check.mat4_multiply(
+            composed, list(native.transform2.asArray()))
+    yield ("chain transform", composed)
+    if len(chain) > 1:
+        yield ("leaf transform", list(chain[-1].transform2.asArray()))

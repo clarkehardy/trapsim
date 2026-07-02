@@ -227,6 +227,41 @@ class TestDiagnoseFrame:
         assert sc.diagnose_frame(box, box, box) == "ok"
 
 
+# ── placement_plausible ───────────────────────────────────────────────────────
+
+class TestPlacementPlausible:
+    # Real regression data (rf_guide rod_1_TL): a 3.175 mm rod rotated 45°
+    # about its axis.  The tessellated mesh box is tight; Fusion's BRep box
+    # is loose across the cross-section (NURBS control points overhang by
+    # √2), so extent equality falsely rejected a correct export.
+    MESH  = ((-3.687855977668415, 19.565568162741574, -116.6246034973143),
+             (-0.5264031165060679, 22.727021023903742, 75.32320000000017))
+    BREP  = ((-4.346776100472406, 18.906648039937583, -116.62459999999984),
+             (0.14335196006242112, 23.39677610047223, 75.32320000000016))
+
+    def test_rotated_rod_regression(self, sc):
+        # centre agreement ~6 µm, mesh contained in loose box → must pass
+        assert sc.placement_plausible(self.MESH, self.BREP, center_tol=3.8)
+
+    def test_tight_box_matches_itself(self, sc):
+        assert sc.placement_plausible(self.BREP, self.BREP, center_tol=1.0)
+
+    def test_local_frame_mesh_fails(self, sc):
+        # body-local rod: centred near its own origin, long axis on y
+        local = ((-1.5875, 0.0, -1.5875), (1.5875, 191.9478, 1.5875))
+        assert not sc.placement_plausible(local, self.BREP, center_tol=3.8)
+
+    def test_mesh_poking_outside_fails(self, sc):
+        # right centre, but wrong rotation → mesh sticks out of the BRep box
+        big = ((-98.0, 18.9, -22.75), (94.0, 23.4, 34.05))
+        assert not sc.placement_plausible(big, self.BREP, center_tol=3.8)
+
+    def test_pad_allows_float_slack(self, sc):
+        eps = 0.4    # within default pad=0.5
+        box = ((self.BREP[0][0] - eps, *self.BREP[0][1:]), self.BREP[1])
+        assert sc.placement_plausible(box, self.BREP, center_tol=1.0)
+
+
 # ── boxes_match ───────────────────────────────────────────────────────────────
 
 class TestBoxesMatch:

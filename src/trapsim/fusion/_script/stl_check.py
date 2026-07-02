@@ -115,6 +115,29 @@ def write_binary_stl(path, coords, indices, scale=1.0):
                                      *v[0], *v[1], *v[2], 0))
 
 
+def placement_plausible(mesh_box, brep_box_mm, center_tol, pad=0.5):
+    """True if a tight tessellated-mesh bounding box sits at a (possibly
+    loose) BRep reference box: centres agree per axis within `center_tol`
+    and the mesh box is contained in the reference box padded by `pad`.
+
+    Fusion's BRepBody.boundingBox is conservative for curved faces — it is
+    computed from NURBS control points, which e.g. overhang by ~√2 across a
+    45°-rotated cylinder — so extent equality is the wrong test against a
+    tessellation whose vertices lie exactly on the surface.  Containment
+    plus centre agreement is the right one: a mesh in the wrong frame lands
+    with the wrong centre, and a mis-rotated mesh pokes outside the box."""
+    (m_lo, m_hi) = mesh_box
+    (r_lo, r_hi) = brep_box_mm
+    for i in range(3):
+        centre_m = 0.5 * (m_lo[i] + m_hi[i])
+        centre_r = 0.5 * (r_lo[i] + r_hi[i])
+        if abs(centre_m - centre_r) > center_tol:
+            return False
+        if m_lo[i] < r_lo[i] - pad or m_hi[i] > r_hi[i] + pad:
+            return False
+    return True
+
+
 def scale_binary_stl(path, factor):
     """Scale all vertex coordinates (not normals) in-place by `factor`.
     Used to convert a cm-unit export (Fusion's internal unit, which the API
