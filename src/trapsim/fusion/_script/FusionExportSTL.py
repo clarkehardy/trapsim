@@ -398,14 +398,21 @@ def _export_via_temp_doc(temp_root, temp_mgr, out_path, body_proxy, chain):
     remove the copy.  Returns a short placement note for the log."""
     brep_mgr = adsk.fusion.TemporaryBRepManager.get()
     world_box = _bbox_mm(body_proxy.boundingBox)
+    diag = sum((world_box[1][i] - world_box[0][i]) ** 2
+               for i in range(3)) ** 0.5
+    center_tol = max(1.0, 0.02 * diag)
 
     # 1. world-positioned temporary copy.  Copying a proxy is documented to
     #    bake the occurrence transform; trust it only after checking its
-    #    BRep box against the proxy's (identical computation → tight match),
-    #    and fall back to explicit chain transforms if it is misplaced.
+    #    BRep box against the proxy's, and fall back to explicit chain
+    #    transforms if it is misplaced.  The comparison must be centre +
+    #    containment, not equality: the proxy's box is loose (transformed
+    #    NURBS control points, ~√2 overhang across a 45°-rotated cylinder)
+    #    while a baked copy's box is recomputed tight from the geometry.
     note = ""
     copied = brep_mgr.copy(body_proxy)
-    if not _brep_boxes_close(_bbox_mm(copied.boundingBox), world_box):
+    if not stl_check.placement_plausible(
+            _bbox_mm(copied.boundingBox), world_box, center_tol):
         native = (body_proxy.nativeObject
                   if body_proxy.assemblyContext is not None else body_proxy)
         copied = None
@@ -416,7 +423,7 @@ def _export_via_temp_doc(temp_root, temp_mgr, out_path, body_proxy, chain):
             matrix.setWithArray(list(cells))
             brep_mgr.transform(candidate, matrix)
             cand_box = _bbox_mm(candidate.boundingBox)
-            if _brep_boxes_close(cand_box, world_box):
+            if stl_check.placement_plausible(cand_box, world_box, center_tol):
                 copied = candidate
                 note = label
                 break
@@ -445,26 +452,11 @@ def _export_via_temp_doc(temp_root, temp_mgr, out_path, body_proxy, chain):
 
     # 3. verify the file: tight mesh box vs loose BRep box.
     lo, hi, _ntri = stl_check.read_binary_stl_bbox(out_path)
-    diag = sum((world_box[1][i] - world_box[0][i]) ** 2
-               for i in range(3)) ** 0.5
-    center_tol = max(1.0, 0.02 * diag)
     if not stl_check.placement_plausible((lo, hi), world_box, center_tol):
         raise RuntimeError(
             f"exported file spans {lo}..{hi} mm but the body sits at "
             f"{world_box[0]}..{world_box[1]} mm in the assembly")
     return note
-
-
-def _brep_boxes_close(box_a, box_b, tol_mm=0.2):
-    """Two BRep bounding boxes of the same body under the same placement
-    are the same computation — compare per-component with a small slack."""
-    for lo_a, lo_b in zip(box_a[0], box_b[0]):
-        if abs(lo_a - lo_b) > tol_mm:
-            return False
-    for hi_a, hi_b in zip(box_a[1], box_b[1]):
-        if abs(hi_a - hi_b) > tol_mm:
-            return False
-    return True
 
 
 def _matrix_candidates(chain):
