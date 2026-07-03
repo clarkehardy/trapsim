@@ -349,6 +349,33 @@ def _worker(args):
     return ion_id, rows, info
 
 
+# ── Termination summary ─────────────────────────────────────────────────────
+def _print_termination_summary(summaries):
+    """Print a count/fraction table of termination reasons, with a per-object
+    breakdown under 'splatted' when splat labels are available."""
+    n = len(summaries)
+    if n == 0:
+        return
+    reasons = {}
+    splat_objects = {}
+    for info in summaries.values():
+        reason = info["reason"]
+        reasons[reason] = reasons.get(reason, 0) + 1
+        if reason == "splatted":
+            obj = info.get("splat_object") or "(unknown)"
+            splat_objects[obj] = splat_objects.get(obj, 0) + 1
+
+    width = max(len(r) for r in reasons)
+    if splat_objects:
+        width = max(width, 2 + max(len(o) for o in splat_objects))
+    print(f"\nTermination summary ({n} particle{'s' if n != 1 else ''}):")
+    for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        print(f"  {reason:<{width}}  {count:4d}  ({100*count/n:5.1f}%)")
+        if reason == "splatted":
+            for obj, c in sorted(splat_objects.items(), key=lambda kv: -kv[1]):
+                print(f"    {obj:<{width - 2}}  {c:4d}  ({100*c/n:5.1f}%)")
+
+
 # ── Particle starts ─────────────────────────────────────────────────────────
 def _build_ion_starts(particles_cfg, mass_kg, charge_C, master_seed=42):
     starts = particles_cfg.get("starts", [])
@@ -470,6 +497,7 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
             summaries[ion_id]    = info
     elapsed = time.perf_counter() - t0
     print(f"\nAll particles done in {elapsed:.1f} s wall")
+    _print_termination_summary(summaries)
 
     # Write outputs
     traj_path = os.path.join(base_dir, f"trajectories_{run_number}.csv")
