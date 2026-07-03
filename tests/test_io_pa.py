@@ -14,13 +14,15 @@ import numpy as np
 from trapsim.io.pa import load_splat_mask
 
 
-def _geometry(n_electrodes=2, shape=(4, 3, 2)):
+def _geometry(n_electrodes=2, shape=(4, 3, 2), dielectric_names=()):
     electrodes = [
         SimpleNamespace(electrode_id=i + 1, name=f"elec_{i + 1}")
         for i in range(n_electrodes)
     ]
+    dielectrics = [SimpleNamespace(name=n) for n in dielectric_names]
     return SimpleNamespace(grid=SimpleNamespace(shape=shape),
-                           electrodes=electrodes)
+                           electrodes=electrodes,
+                           dielectrics=dielectrics)
 
 
 def _write_mask(solver_dir, filename, shape, true_voxels):
@@ -46,8 +48,24 @@ class TestLoadSplatMask:
         assert int(np.count_nonzero(labels)) == 2
         assert names == {1: "elec_1", 2: "elec_2"}
 
-    def test_dielectric_gets_reserved_label(self, tmp_path):
-        geo = _geometry()
+    def test_per_body_dielectric_labels(self, tmp_path):
+        geo = _geometry(dielectric_names=("trapping_lens", "lens_holder"))
+        shape = geo.grid.shape
+        _write_mask(tmp_path, "mask_1.raw", shape, [(0, 0, 0)])
+        _write_mask(tmp_path, "mask_2.raw", shape, [])
+        _write_mask(tmp_path, "dielectric_mask_1.raw", shape, [(1, 1, 1)])
+        _write_mask(tmp_path, "dielectric_mask_2.raw", shape, [(1, 2, 2)])
+
+        labels, names = load_splat_mask(geo, str(tmp_path))
+        assert labels[1, 1, 1] == 3
+        assert labels[1, 2, 2] == 4
+        assert names[3] == "trapping_lens"
+        assert names[4] == "lens_holder"
+
+    def test_legacy_combined_dielectric_fallback(self, tmp_path):
+        """Old solver dirs have only the combined dielectric_mask.raw —
+        accepted, labelled N+1, named generically."""
+        geo = _geometry(dielectric_names=("trapping_lens", "lens_holder"))
         shape = geo.grid.shape
         _write_mask(tmp_path, "mask_1.raw", shape, [(0, 0, 0)])
         _write_mask(tmp_path, "mask_2.raw", shape, [])
@@ -56,6 +74,21 @@ class TestLoadSplatMask:
         labels, names = load_splat_mask(geo, str(tmp_path))
         assert labels[1, 1, 1] == 3
         assert names[3] == "dielectric"
+
+    def test_partial_per_body_masks_fall_back_to_combined(self, tmp_path):
+        """If any per-body file is missing, none are trusted — use the
+        combined mask so labels can't silently point at the wrong body."""
+        geo = _geometry(dielectric_names=("trapping_lens", "lens_holder"))
+        shape = geo.grid.shape
+        _write_mask(tmp_path, "mask_1.raw", shape, [])
+        _write_mask(tmp_path, "mask_2.raw", shape, [])
+        _write_mask(tmp_path, "dielectric_mask_1.raw", shape, [(0, 0, 0)])
+        _write_mask(tmp_path, "dielectric_mask.raw", shape, [(1, 1, 1)])
+
+        labels, names = load_splat_mask(geo, str(tmp_path))
+        assert labels[0, 0, 0] == 0            # per-body file ignored
+        assert labels[1, 1, 1] == 3
+        assert names == {1: "elec_1", 2: "elec_2", 3: "dielectric"}
 
     def test_missing_electrode_mask_returns_none(self, tmp_path):
         geo = _geometry()

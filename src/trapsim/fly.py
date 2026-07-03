@@ -465,6 +465,11 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
         electrode_mask, splat_names = splat
         n_elec_vox = int(np.count_nonzero(electrode_mask))
         print(f"  Splat mask: {n_elec_vox} voxels ({100*n_elec_vox/electrode_mask.size:.2f}%)")
+        n_diel_labels = len(splat_names) - len(geometry.electrodes)
+        if len(geometry.dielectrics) > n_diel_labels:
+            print(f"  [note] no per-body dielectric masks in {solver_dir} — "
+                  f"dielectric splats will not be named individually "
+                  f"(re-run the voxelizer to fix)")
 
     # Set worker globals BEFORE forking
     _W_phi_stack      = phi_stack

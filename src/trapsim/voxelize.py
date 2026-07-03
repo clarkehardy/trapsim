@@ -166,10 +166,13 @@ def build_electrode_masks(geometry: GeometryConfig, out_dir: str) -> None:
 
 
 def build_dielectric_mask(geometry: GeometryConfig, out_dir: str) -> None:
-    """Write solver/dielectric_mask.raw — union of all dielectric bodies on
-    the *node* grid (same shape as electrode masks), for splat detection.
+    """Write solver/dielectric_mask_<i>.raw for each dielectric body
+    (i = 1..M in declaration order) on the *node* grid (same shape as
+    electrode masks), so splat detection can name the body that was hit.
+    Earlier trapsim versions wrote a single combined dielectric_mask.raw,
+    which load_splat_mask still accepts as a fallback.
 
-    Skipped (no file written) if there are no dielectrics.
+    Skipped (no files written) if there are no dielectrics.
     """
     if not geometry.dielectrics:
         return
@@ -178,18 +181,16 @@ def build_dielectric_mask(geometry: GeometryConfig, out_dir: str) -> None:
     dx         = geometry.grid.dx_mm
     world_off  = geometry.grid.world_offset_mm
 
-    print("\nVoxelizing dielectric bodies (for splat mask) ...")
-    mask = np.zeros(NX * NY * NZ, dtype=np.uint8)
-    for diel in geometry.dielectrics:
+    print("\nVoxelizing dielectric bodies (for splat masks) ...")
+    for i, diel in enumerate(geometry.dielectrics, start=1):
         print(f"  Dielectric {diel.name}:")
         mesh = trimesh.load_mesh(diel.stl)
-        sub  = _voxelize_to_nodes(
+        mask = _voxelize_to_nodes(
             mesh, (NX, NY, NZ), dx, world_off,
             label=os.path.basename(diel.stl))
-        mask |= sub
-    path = os.path.join(out_dir, "dielectric_mask.raw")
-    mask.tofile(path)
-    print(f"  → {path}  ({int(mask.sum())} voxels set)")
+        path = os.path.join(out_dir, f"dielectric_mask_{i}.raw")
+        mask.tofile(path)
+        print(f"  → {path}  ({int(mask.sum())} voxels set)")
 
 
 def build_epsilon(geometry: GeometryConfig, out_dir: str) -> None:
