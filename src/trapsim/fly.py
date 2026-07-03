@@ -34,6 +34,7 @@ E_C = 1.602176634e-19   # Coulombs per elementary charge
 _W_phi_stack: np.ndarray | None = None
 _W_grid: dict[str, Any] | None  = None
 _W_electrode_mask: np.ndarray | None = None
+_W_splat_names: dict[int, str] | None = None
 _W_geometry: GeometryConfig | None = None
 _W_experiment: ExperimentConfig | None = None
 _W_schedule: Schedule | None    = None
@@ -126,7 +127,8 @@ def _rhs(t_us, y, env, physics):
 
 def integrate_particle(ion_id, y0, t_start, t_max_us, intg, physics, schedule,
                        env, world_offset_mm, grid_shape, grid_dx,
-                       record_stride, v_stop, electrode_mask=None, verbose=True):
+                       record_stride, v_stop, electrode_mask=None,
+                       splat_names=None, verbose=True):
     """Run one Dormand-Prince RK4/5 integration with split-operator damping."""
     # Dormand-Prince coefficients
     a21 = 1/5
@@ -148,6 +150,7 @@ def integrate_particle(ion_id, y0, t_start, t_max_us, intg, physics, schedule,
     rows = []
     n_acc = n_rej = step_counter = consec_rej = 0
     reason = "max_time"
+    splat_object = None
     t_wall_start = time.perf_counter()
     t_wall_last  = t_wall_start
 
@@ -262,8 +265,12 @@ def integrate_particle(ion_id, y0, t_start, t_max_us, intg, physics, schedule,
                 iz = int(round((y[2] - woz) / dx))
                 NX, NY, NZ = grid_shape
                 if 0 <= ix < NX and 0 <= iy < NY and 0 <= iz < NZ:
-                    if electrode_mask[iz, iy, ix]:
+                    label = int(electrode_mask[iz, iy, ix])
+                    if label:
                         reason = "splatted"
+                        if splat_names:
+                            splat_object = splat_names.get(
+                                label, f"label {label}")
                         if record_stride > 0:
                             _record(t, y)
                         break
@@ -303,6 +310,7 @@ def integrate_particle(ion_id, y0, t_start, t_max_us, intg, physics, schedule,
         "steps_rejected": n_rej,
         "t_sim_us":       t,
         "reason":         reason,
+        "splat_object":   splat_object,
     }
 
 
@@ -329,11 +337,15 @@ def _worker(args):
     rows, info = integrate_particle(
         ion_id, y0, t_start, t_max_us, integrator, physics, schedule, env,
         world_off, grid_shape, grid_dx, record_stride, v_stop,
-        electrode_mask=_W_electrode_mask, verbose=True)
+        electrode_mask=_W_electrode_mask, splat_names=_W_splat_names,
+        verbose=True)
     elapsed = time.perf_counter() - t0
+    reason_str = info["reason"]
+    if info.get("splat_object"):
+        reason_str += f" on {info['splat_object']}"
     print(f"  [ion {ion_id}] done: {info['steps_accepted']} acc / "
           f"{info['steps_rejected']} rej steps, t_sim={info['t_sim_us']:.1f} µs, "
-          f"reason={info['reason']}, wall={elapsed:.1f} s", flush=True)
+          f"reason={reason_str}, wall={elapsed:.1f} s", flush=True)
     return ion_id, rows, info
 
 
@@ -372,7 +384,8 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
         run_number: int = 1,
         workers: int | None = None) -> dict:
     """Run the full fly pipeline and write outputs.  Returns a summary dict."""
-    global _W_phi_stack, _W_grid, _W_electrode_mask, _W_geometry, _W_experiment, _W_schedule
+    global _W_phi_stack, _W_grid, _W_electrode_mask, _W_splat_names, \
+        _W_geometry, _W_experiment, _W_schedule
 
     n_workers = workers or os.cpu_count() or 1
     print(f"━━━ trapsim.fly  run={run_number}  workers={n_workers} ━━━\n")
@@ -412,21 +425,25 @@ def fly(geometry: GeometryConfig, experiment: ExperimentConfig, *,
     print(f"  PA stack: shape {phi_stack.shape}  "
           f"({phi_stack.nbytes/1e6:.0f} MB)  in {time.perf_counter()-t0:.1f} s")
 
-    # Splat mask: read the exact boolean voxel masks (electrodes + dielectrics)
-    # from the voxelizer's work files.  Falls back to disabled splat detection
-    # if those files aren't present.
-    electrode_mask = load_splat_mask(geometry, solver_dir)
-    if electrode_mask is None:
+    # Splat mask: read the exact voxel masks (electrodes + dielectrics) from
+    # the voxelizer's work files into a label array so a splat can name what
+    # it hit.  Falls back to disabled splat detection if the files aren't
+    # present.
+    splat = load_splat_mask(geometry, solver_dir)
+    if splat is None:
+        electrode_mask, splat_names = None, None
         print(f"  [warn] no mask_<id>.raw files in {solver_dir} — "
               f"splat detection disabled")
     else:
-        n_elec_vox = int(electrode_mask.sum())
+        electrode_mask, splat_names = splat
+        n_elec_vox = int(np.count_nonzero(electrode_mask))
         print(f"  Splat mask: {n_elec_vox} voxels ({100*n_elec_vox/electrode_mask.size:.2f}%)")
 
     # Set worker globals BEFORE forking
     _W_phi_stack      = phi_stack
     _W_grid           = grid_dict
     _W_electrode_mask = electrode_mask
+    _W_splat_names    = splat_names
     _W_geometry  = geometry
     _W_experiment = experiment
     _W_schedule  = schedule
