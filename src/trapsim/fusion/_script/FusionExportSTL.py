@@ -18,7 +18,8 @@ Flow (all in one shot):
      viewport (adsk.core.UserInterface.selectEntity — this returns a body proxy
      with .assemblyContext set to the specific Occurrence clicked, so
      ':1' and ':2' copies are naturally distinguished).  For all_bodies
-     targets any body of the component identifies the occurrence.
+     targets the user selects the occurrence itself (browser-tree click)
+     so nested assemblies map at the intended level.
   5. Write fusion_map.yaml.
   6. Copy each mapped body into a throwaway direct-design document at its
      assembly-world position and export it there with Fusion's STANDARD
@@ -346,37 +347,44 @@ def _collect_bodies(occurrence, out):
 # ── Interactive body pick ─────────────────────────────────────────────────────
 
 def _prompt_pick(ui, category, entity_name, stl_path, all_bodies=False):
-    """Ask the user to click a body in the viewport.  Returns
-    (occurrence_full_path, body_name) or None on cancel.  For all_bodies
-    targets any body of the component identifies the occurrence; the
-    mapping is stored as body: "*"."""
+    """Ask the user to pick in the viewport.  Returns
+    (occurrence_full_path, body_name) or None on cancel.
+
+    Single-body targets: click the body (a viewport pick returns a proxy
+    whose .assemblyContext is the specific occurrence clicked).
+
+    all_bodies targets: select the COMPONENT, not a body — a viewport
+    click on nested geometry lands on a leaf occurrence, which for a
+    vendor-STEP assembly (one body per sub-component) holds a single
+    body.  The browser tree stays clickable during selectEntity, so the
+    prompt directs the user there to pick the intended assembly level.
+    The mapping is stored as body: "*"."""
     if all_bodies:
-        prompt = (f"Click ANY body of the component for {stl_path}    "
-                  f"({category}: {entity_name}, all bodies)")
+        prompt = (f"Select the component for {stl_path} — click it in the "
+                  f"BROWSER TREE at the level whose bodies should all be "
+                  f"exported    ({category}: {entity_name}, all bodies)")
+        sel_filter = "Occurrences"
     else:
         prompt = (f"Click the body for {stl_path}    "
                   f"({category}: {entity_name})")
+        sel_filter = "SolidBodies"
     try:
-        selection = ui.selectEntity(prompt, "SolidBodies")
+        selection = ui.selectEntity(prompt, sel_filter)
     except Exception:                                                # noqa: BLE001
         # User pressed Escape → SDK raises.  Treat as skip.
         return None
     if selection is None:
         return None
-    body = selection.entity
-    if not isinstance(body, adsk.fusion.BRepBody):
-        return None
-    ctx = body.assemblyContext
-    occ_path = ctx.fullPathName if ctx is not None else ""
+    entity = selection.entity
     if all_bodies:
-        if not occ_path:
-            ui.messageBox(
-                f"'{body.name}' is a root-level body — there is no component "
-                f"to take all bodies from.  '{stl_path}' stays unmapped.",
-                "No occurrence")
+        if not isinstance(entity, adsk.fusion.Occurrence):
             return None
-        return (occ_path, ALL_BODIES)
-    return (occ_path, body.name)
+        return (entity.fullPathName, ALL_BODIES)
+    if not isinstance(entity, adsk.fusion.BRepBody):
+        return None
+    ctx = entity.assemblyContext
+    occ_path = ctx.fullPathName if ctx is not None else ""
+    return (occ_path, entity.name)
 
 
 # ── STL export ────────────────────────────────────────────────────────────────
