@@ -254,6 +254,17 @@ Then in Fusion 360:
 4. First run only: for each STL listed in `geometry.yaml`, the script asks you to click the corresponding body in the viewport. Fusion's pick returns the specific occurrence you clicked, so `part v1:1` vs `part v1:2` are naturally distinguished. The mapping is written to `<simulation-folder>/fusion_map.yaml`.
 5. Every subsequent run reads the map and re-exports without prompting. If a mapping breaks (occurrence renamed or deleted) the script re-prompts only for that STL.
 
+For a part made of many bodies (e.g. an imported vendor STEP used as decoration), add `all_bodies: true` to its entry in `geometry.yaml`:
+
+```yaml
+decoration:
+  - name: gate_valve
+    stl: stl/gate_valve.stl
+    all_bodies: true
+```
+
+At the prompt you click *any* body of the component; the script maps the whole occurrence (stored as `body: "*"` in `fusion_map.yaml`) and exports every body in it — child occurrences included — into that one STL. Toggling `all_bodies` on an already-mapped entry marks the mapping stale, so the next run re-prompts just that one. The key is read only by the Fusion script; trapsim itself ignores it.
+
 Fusion's `ExportManager` STL writer emits body-local coordinates for anything living under an occurrence — a [known API limitation](https://forums.autodesk.com/t5/fusion-api-and-scripts-forum/how-to-export-stl-using-document-coordinates/td-p/10794760) with no coordinate-space option. The script uses the Autodesk-recommended workaround (the same one the [ExportIt](https://github.com/WilkoV/Fusion360_ExportIt) add-in uses): each body is copied at its assembly-world position via `TemporaryBRepManager` into a throwaway direct-design document and exported there with Fusion's standard STL writer, so mesher and writer are stock Fusion end-to-end. The user's design is never modified; the temp document is closed unsaved. Every placement is verified before export (copied body's bounding box against the body's assembly-world box) and after (the written file's mesh box must sit at the world box), so a wrong-frame or wrong-body export fails loudly instead of silently corrupting the simulation geometry. Each run appends a per-file report to `fusion_export_log.txt` in the simulation folder.
 
 ### SolidWorks

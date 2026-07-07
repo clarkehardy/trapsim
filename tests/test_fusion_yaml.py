@@ -146,6 +146,27 @@ class TestFusionMapRoundtrip:
         assert parsed["fusion_design_name"] == "OpticalPaulTrapMkIV"
         assert parsed["mappings"] == mappings
 
+    def test_all_bodies_sentinel_roundtrips(self, y):
+        # body: "*" marks an all-bodies (whole occurrence) mapping; '*' is
+        # outside the bare-scalar charset so it must be quoted and parse back
+        mappings = [
+            {"stl": "stl/gate_valve.stl",
+             "occurrence": "gate valve v3:1",
+             "body": "*"},
+        ]
+        text = y.dump_mapping_file("RF guide assembly", mappings)
+        assert 'body: "*"' in text
+        parsed = y.parse(text)
+        assert parsed["mappings"] == mappings
+
+    def test_all_bodies_flag_parses_as_bool(self, y):
+        parsed = y.parse(
+            "decoration:\n"
+            "  - name: gate_valve\n"
+            "    stl: stl/gate_valve.stl\n"
+            "    all_bodies: true\n")
+        assert parsed["decoration"][0]["all_bodies"] is True
+
     def test_double_quotes_survive_specials(self, y):
         # spaces, colons, plus, hash-inside-body-name all need quoting
         mappings = [
